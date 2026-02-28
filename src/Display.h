@@ -7,4 +7,4 @@
 
 bool initDisplay();
 void drawStatus(const PrinterStatus& status);
-void drawProvisioningScreen(const char* apSsid);
+void drawProvisioningScreen(const char* apSsid, const IPAddress& apIp);

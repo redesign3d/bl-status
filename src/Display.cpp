@@ -3,10 +3,14 @@
 #include <Arduino.h>
 #include <Wire.h>
 #include <math.h>
+#include <qrcode.h>
 
 static Adafruit_SSD1306 display(128, 64, &Wire, OLED_RESET_PIN);
 
-static void drawWifiScreen() {
+namespace {
+constexpr char kProvisioningQrUrl[] = "http://192.168.4.1/";
+
+void drawWifiScreen() {
   display.clearDisplay();
   display.setTextWrap(false);
 
@@ -27,10 +31,49 @@ static void drawWifiScreen() {
   display.display();
 }
 
-static void drawCheckmark(int x, int y, int size) {
+void drawCheckmark(int x, int y, int size) {
   display.drawLine(x, y + size / 2, x + size / 3, y + size, SSD1306_WHITE);
   display.drawLine(x + size / 3, y + size, x + size, y, SSD1306_WHITE);
 }
+
+String formatTemp(float value) {
+  if (!isValidTemp(value)) {
+    return String("--");
+  }
+  int rounded = static_cast<int>(roundf(value));
+  return String(rounded);
+}
+
+void drawQrCode(int originX, int originY) {
+  QRCode qrcode;
+  uint8_t qrcodeData[qrcode_getBufferSize(3)];
+  qrcode_initText(&qrcode, qrcodeData, 3, ECC_LOW, kProvisioningQrUrl);
+
+  for (uint8_t y = 0; y < qrcode.size; ++y) {
+    for (uint8_t x = 0; x < qrcode.size; ++x) {
+      if (qrcode_getModule(&qrcode, x, y)) {
+        display.fillRect(originX + (x * PROVISIONING_QR_SCALE), originY + (y * PROVISIONING_QR_SCALE),
+                         PROVISIONING_QR_SCALE, PROVISIONING_QR_SCALE, SSD1306_WHITE);
+      }
+    }
+  }
+}
+
+void printWrappedValue(const char* value, int x, int y, size_t firstLineChars, size_t secondLineChars) {
+  if (!value) {
+    return;
+  }
+  const size_t len = strlen(value);
+  String first = String(value).substring(0, min(len, firstLineChars));
+  display.setCursor(x, y);
+  display.println(first);
+  if (len > firstLineChars) {
+    String second = String(value).substring(firstLineChars, min(len, firstLineChars + secondLineChars));
+    display.setCursor(x, y + 10);
+    display.println(second);
+  }
+}
+}  // namespace
 
 bool initDisplay() {
   Wire.begin(OLED_SDA_PIN, OLED_SCL_PIN);
@@ -42,14 +85,6 @@ bool initDisplay() {
   display.setTextColor(SSD1306_WHITE);
   display.display();
   return true;
-}
-
-static String formatTemp(float value) {
-  if (!isValidTemp(value)) {
-    return String("--");
-  }
-  int rounded = static_cast<int>(roundf(value));
-  return String(rounded);
 }
 
 void drawStatus(const PrinterStatus& status) {
@@ -127,20 +162,25 @@ void drawStatus(const PrinterStatus& status) {
   display.display();
 }
 
-void drawProvisioningScreen(const char* apSsid) {
+void drawProvisioningScreen(const char* apSsid, const IPAddress& apIp) {
   display.clearDisplay();
   display.setTextWrap(false);
   display.setTextSize(1);
   display.setCursor(0, 0);
-  display.println("Bambu Status");
-  display.setTextSize(1);
-  display.setCursor(0, 14);
-  display.println("Provisioning Mode");
-  display.setCursor(0, 28);
-  display.println("Connect AP:");
-  display.setCursor(0, 38);
-  display.println(apSsid ? apSsid : "BambuStatus");
-  display.setCursor(0, 52);
-  display.println("Open 192.168.4.1");
+  display.println("Setup Mode");
+
+  drawQrCode(0, 11);
+  display.drawRect(0, 11, 58, 52, SSD1306_WHITE);
+
+  display.setCursor(64, 0);
+  display.println("1 Join AP");
+  printWrappedValue(apSsid ? apSsid : "BambuStatus", 64, 10, 10, 10);
+  display.setCursor(64, 34);
+  display.println("2 Open / Scan");
+  display.setCursor(64, 44);
+  display.println(apIp.toString());
+  display.setCursor(64, 54);
+  display.println("192.168.4.1");
+
   display.display();
 }

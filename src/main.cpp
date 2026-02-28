@@ -102,7 +102,7 @@ void loop() {
     updateLeds(gStatus, now);
     if (gDisplayReady && (now - lastDisplayMs >= DISPLAY_INTERVAL_MS)) {
       lastDisplayMs = now;
-      drawProvisioningScreen(gProvisioning.provisioningSsid());
+      drawProvisioningScreen(gProvisioning.provisioningSsid(), gProvisioning.provisioningIp());
     }
     return;
   }
