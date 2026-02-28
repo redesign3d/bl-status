@@ -292,6 +292,7 @@ bool ProvisioningManager::startProvisioning(uint32_t nowMs) {
   } else {
     clearDeviceConfig(&draftConfig_);
     draftConfig_.printerPort = DEFAULT_MQTT_TLS_PORT;
+    strlcpy(draftConfig_.mqttUsername, DEFAULT_MQTT_USERNAME, sizeof(draftConfig_.mqttUsername));
     draftConfig_.tlsInsecure = DEFAULT_TLS_INSECURE;
   }
 

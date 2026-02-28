@@ -17,6 +17,7 @@ constexpr size_t ACCESS_CODE_MAX_LEN = 63;
 constexpr uint16_t MIN_MQTT_PORT = 1;
 constexpr uint16_t MAX_MQTT_PORT = 65535;
 constexpr uint16_t DEFAULT_MQTT_TLS_PORT = 8883;
+constexpr const char* DEFAULT_MQTT_USERNAME = "bblp";
 
 constexpr bool ENABLE_LED_SYNC = true;  // Increase idle brightness when printer light is on.
 

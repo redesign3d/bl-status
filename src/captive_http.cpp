@@ -298,6 +298,7 @@ bool CaptiveHttp::parseConfigFromRequest(DeviceConfig* outConfig, String* errorM
   } else {
     clearDeviceConfig(&merged);
     merged.printerPort = DEFAULT_MQTT_TLS_PORT;
+    strlcpy(merged.mqttUsername, DEFAULT_MQTT_USERNAME, sizeof(merged.mqttUsername));
     merged.tlsInsecure = DEFAULT_TLS_INSECURE;
   }
 
