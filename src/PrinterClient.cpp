@@ -103,7 +103,11 @@ void PrinterClient::ensureWifi() {
 
   lastWifiAttemptMs_ = now;
   Serial.println("Connecting to provisioned WiFi network...");
-  WiFi.begin(config_->wifiSsid, config_->wifiPassword);
+  if (config_->wifiPassword[0] == '\0') {
+    WiFi.begin(config_->wifiSsid);
+  } else {
+    WiFi.begin(config_->wifiSsid, config_->wifiPassword);
+  }
 }
 
 void PrinterClient::ensureMqtt() {

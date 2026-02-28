@@ -4,6 +4,7 @@
 #include <esp_random.h>
 #include <string.h>
 
+#include "LogRedaction.h"
 #include "nvs_config_store.h"
 
 namespace {
@@ -65,6 +66,7 @@ void ProvisioningManager::loop(uint32_t nowMs) {
   if (state_ == ProvisioningState::PROVISIONING_ACTIVE) {
     dns_.loop();
     http_.loop(nowMs);
+    improv_.loop(nowMs);
 
     if (provisioningCompletePending_) {
       provisioningCompletePending_ = false;
@@ -183,9 +185,84 @@ bool ProvisioningManager::resetProvisioningConfig(char* message, size_t messageL
   clearDeviceConfig(&activeConfig_);
   clearDeviceConfig(&draftConfig_);
   hasActiveConfig_ = false;
-  http_.setDraftConfig(nullptr);
+  refreshDraftInPortal();
   if (message && messageLen > 0) {
     strlcpy(message, "Configuration erased. Device remains in setup mode.", messageLen);
+  }
+  return true;
+}
+
+bool ProvisioningManager::handleImprovWifiSettings(const char* ssid, const char* password, char* url, size_t urlLen,
+                                                   char* message, size_t messageLen) {
+  if (!ssid || !password || !url || urlLen == 0) {
+    if (message && messageLen > 0) {
+      strlcpy(message, "Invalid Improv payload.", messageLen);
+    }
+    return false;
+  }
+
+  const size_t ssidLen = strlen(ssid);
+  const size_t passwordLen = strlen(password);
+  if (ssidLen == 0 || ssidLen > WIFI_SSID_MAX_LEN || passwordLen > WIFI_PASSWORD_MAX_LEN || !isPrintableAscii(ssid) ||
+      !isPrintableAscii(password) || (passwordLen > 0 && passwordLen < 8)) {
+    if (message && messageLen > 0) {
+      strlcpy(message, "Wi-Fi credentials rejected.", messageLen);
+    }
+    return false;
+  }
+
+  Serial.printf("Improv Wi-Fi request received for SSID %s\n", redactForLog(ssid).c_str());
+
+  WiFi.setAutoReconnect(false);
+  WiFi.disconnect(false, false);
+  delay(100);
+  if (passwordLen == 0) {
+    WiFi.begin(ssid);
+  } else {
+    WiFi.begin(ssid, password);
+  }
+
+  wl_status_t status = WiFi.status();
+  for (uint8_t attempt = 0; attempt < IMPROV_WIFI_CONNECT_ATTEMPTS && status != WL_CONNECTED; ++attempt) {
+    delay(IMPROV_WIFI_CONNECT_RETRY_MS);
+    status = WiFi.status();
+  }
+
+  if (status != WL_CONNECTED) {
+    WiFi.disconnect(false, false);
+    if (message && messageLen > 0) {
+      strlcpy(message, "Unable to connect to Wi-Fi.", messageLen);
+    }
+    return false;
+  }
+
+  strlcpy(draftConfig_.wifiSsid, ssid, sizeof(draftConfig_.wifiSsid));
+  strlcpy(draftConfig_.wifiPassword, password, sizeof(draftConfig_.wifiPassword));
+  refreshDraftInPortal();
+  provisioningDeadlineMs_ = millis() + PROVISIONING_AP_TIMEOUT_MS;
+
+  const IPAddress localIp = WiFi.localIP();
+  snprintf(url, urlLen, "http://%u.%u.%u.%u/", localIp[0], localIp[1], localIp[2], localIp[3]);
+
+  ConfigValidationResult validation = validateDeviceConfig(draftConfig_);
+  if (!validation.ok) {
+    if (message && messageLen > 0) {
+      strlcpy(message, "Wi-Fi connected. Finish setup at the local URL.", messageLen);
+    }
+    return true;
+  }
+
+  char saveMessage[96];
+  memset(saveMessage, 0, sizeof(saveMessage));
+  if (!applySubmittedConfig(draftConfig_, saveMessage, sizeof(saveMessage))) {
+    if (message && messageLen > 0) {
+      strlcpy(message, saveMessage[0] != '\0' ? saveMessage : "Configuration save failed.", messageLen);
+    }
+    return false;
+  }
+
+  if (message && messageLen > 0) {
+    strlcpy(message, "Wi-Fi connected and configuration saved.", messageLen);
   }
   return true;
 }
@@ -236,7 +313,8 @@ bool ProvisioningManager::startProvisioning(uint32_t nowMs) {
     stopProvisioning();
     return false;
   }
-  http_.setDraftConfig(&draftConfig_);
+  refreshDraftInPortal();
+  improv_.begin(Serial, this);
 
   provisioningDeadlineMs_ = nowMs + PROVISIONING_AP_TIMEOUT_MS;
 
@@ -244,13 +322,14 @@ bool ProvisioningManager::startProvisioning(uint32_t nowMs) {
   Serial.println("=== Provisioning Mode ===");
   Serial.printf("Setup SSID: %s\n", apSsid_);
   Serial.printf("Setup URL: http://%s/\n", apIp_.toString().c_str());
-  Serial.println("Open setup AP is active for onboarding.");
+  Serial.println("Open setup AP and Improv serial are active for onboarding.");
   Serial.println("=========================");
   Serial.println();
   return true;
 }
 
 void ProvisioningManager::stopProvisioning() {
+  improv_.stop();
   http_.stop();
   dns_.stop();
   softAp_.stop();
@@ -276,3 +355,18 @@ void ProvisioningManager::generateResetToken() {
 }
 
 uint8_t ProvisioningManager::randomByte() { return static_cast<uint8_t>(esp_random() & 0xFF); }
+
+bool ProvisioningManager::isPrintableAscii(const char* value) const {
+  if (!value) {
+    return false;
+  }
+  for (size_t i = 0; value[i] != '\0'; ++i) {
+    const unsigned char c = static_cast<unsigned char>(value[i]);
+    if (c < 0x20 || c > 0x7E) {
+      return false;
+    }
+  }
+  return true;
+}
+
+void ProvisioningManager::refreshDraftInPortal() { http_.setDraftConfig(&draftConfig_); }

@@ -3,6 +3,7 @@
 #include <Arduino.h>
 
 constexpr const char* PRODUCT_NAME = "BambuStatus";
+constexpr const char* FIRMWARE_VERSION = "dev";
 
 // Runtime configuration schema and limits.
 constexpr uint16_t CONFIG_SCHEMA_VERSION = 1;
@@ -33,6 +34,8 @@ constexpr uint8_t PROVISIONING_SOFTAP_MAX_CLIENTS = 4;
 constexpr uint32_t PROVISIONING_DISPLAY_PAGE_MS = 4000UL;
 constexpr uint8_t PROVISIONING_QR_SCALE = 2;
 constexpr uint16_t IMPROV_SERIAL_MAX_PACKET_BYTES = 128;
+constexpr uint32_t IMPROV_WIFI_CONNECT_RETRY_MS = 500UL;
+constexpr uint8_t IMPROV_WIFI_CONNECT_ATTEMPTS = 20;
 
 // Connectivity recovery: fall back into provisioning without erasing saved config.
 constexpr uint32_t WIFI_FAILURE_CHECK_INTERVAL_MS = 10UL * 1000UL;

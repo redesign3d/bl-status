@@ -365,7 +365,8 @@ bool CaptiveHttp::parseConfigFromRequest(DeviceConfig* outConfig, String* errorM
     appendInvalidField(errorMessage, &firstField, F("wifiSsid"));
   }
   const size_t wifiPasswordLen = strlen(merged.wifiPassword);
-  if (wifiPasswordLen < 8 || wifiPasswordLen > WIFI_PASSWORD_MAX_LEN || !isPrintableAscii(merged.wifiPassword)) {
+  if (wifiPasswordLen > WIFI_PASSWORD_MAX_LEN || !isPrintableAscii(merged.wifiPassword) ||
+      (wifiPasswordLen > 0 && wifiPasswordLen < 8)) {
     appendInvalidField(errorMessage, &firstField, F("wifiPassword"));
   }
   if (!isValidHostValue(merged.printerHost)) {
@@ -447,9 +448,11 @@ void CaptiveHttp::sendPortalPage(const String& message, bool isError) {
   body += F("<label for='wifiSsid'>Wi-Fi SSID</label><input id='wifiSsid' name='wifiSsid' maxlength='32' value='");
   body += wifiSsidValue;
   body += F("' autocapitalize='none' spellcheck='false'>");
-  body += F("<label for='wifiPassword'>Wi-Fi Password</label><input id='wifiPassword' type='password' name='wifiPassword' maxlength='63' autocomplete='new-password'>");
+  body += F("<label for=wifiPassword>Wi-Fi Password</label><input id=wifiPassword type=password name=wifiPassword maxlength=63 autocomplete=new-password>");
   if (keepWifiPassword) {
-    body += F("<small>Leave blank to keep the current Wi-Fi password.</small>");
+    body += F("<small>Leave blank to keep the current Wi-Fi password. Blank is also valid for open networks.</small>");
+  } else {
+    body += F("<small>Leave blank for open networks.</small>");
   }
   body += F("<label for='printerHost'>Printer Host</label><input id='printerHost' name='printerHost' maxlength='255' value='");
   body += printerHostValue;

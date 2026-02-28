@@ -232,9 +232,15 @@ ConfigValidationResult validateDeviceConfig(const DeviceConfig& config) {
   if (!r.ok) {
     return r;
   }
-  r = validateString(config.wifiPassword, 8, WIFI_PASSWORD_MAX_LEN, false);
-  if (!r.ok) {
-    return r;
+  size_t wifiPasswordLen = strlen(config.wifiPassword);
+  if (wifiPasswordLen > WIFI_PASSWORD_MAX_LEN) {
+    return fail(ConfigValidationError::kLengthOutOfRange);
+  }
+  if (!isPrintableAscii(config.wifiPassword)) {
+    return fail(ConfigValidationError::kInvalidCharacters);
+  }
+  if (wifiPasswordLen > 0 && wifiPasswordLen < 8) {
+    return fail(ConfigValidationError::kLengthOutOfRange);
   }
   if (!isValidHost(config.printerHost)) {
     return fail(ConfigValidationError::kInvalidHost);

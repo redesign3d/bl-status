@@ -5,6 +5,7 @@
 #include "RuntimeConfig.h"
 #include "captive_dns.h"
 #include "captive_http.h"
+#include "improv_serial.h"
 #include "softap_manager.h"
 
 enum class ProvisioningState : uint8_t {
@@ -16,7 +17,7 @@ enum class ProvisioningState : uint8_t {
   REBOOT_PENDING,
 };
 
-class ProvisioningManager : public CaptiveHttpHandler {
+class ProvisioningManager : public CaptiveHttpHandler, public ImprovSerialHandler {
  public:
   ProvisioningManager();
 
@@ -36,6 +37,8 @@ class ProvisioningManager : public CaptiveHttpHandler {
 
   bool applySubmittedConfig(const DeviceConfig& config, char* message, size_t messageLen) override;
   bool resetProvisioningConfig(char* message, size_t messageLen) override;
+  bool handleImprovWifiSettings(const char* ssid, const char* password, char* url, size_t urlLen, char* message,
+                                size_t messageLen) override;
 
  private:
   bool loadConfigFromNvs();
@@ -45,6 +48,8 @@ class ProvisioningManager : public CaptiveHttpHandler {
   void buildProvisioningSsid();
   void generateResetToken();
   uint8_t randomByte();
+  bool isPrintableAscii(const char* value) const;
+  void refreshDraftInPortal();
 
   ProvisioningState state_;
   DeviceConfig activeConfig_;
@@ -67,4 +72,5 @@ class ProvisioningManager : public CaptiveHttpHandler {
   SoftApManager softAp_;
   CaptiveDns dns_;
   CaptiveHttp http_;
+  ImprovSerial improv_;
 };
