@@ -3,9 +3,9 @@
 #include <Arduino.h>
 #include <DNSServer.h>
 
-class CaptivePortalDns {
+class CaptiveDns {
  public:
-  CaptivePortalDns();
+  CaptiveDns();
 
   bool begin(const IPAddress& redirectIp, uint16_t port);
   void loop();

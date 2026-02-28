@@ -59,7 +59,7 @@ void markWifiConnecting() {
   gStatus.mqttConnected = false;
   resetStatusFields();
 }
-}
+}  // namespace
 
 void setup() {
   Serial.begin(115200);

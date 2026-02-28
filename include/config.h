@@ -2,11 +2,13 @@
 
 #include <Arduino.h>
 
+constexpr const char* PRODUCT_NAME = "BambuStatus";
+
 // Runtime configuration schema and limits.
 constexpr uint16_t CONFIG_SCHEMA_VERSION = 1;
 constexpr size_t WIFI_SSID_MAX_LEN = 32;
 constexpr size_t WIFI_PASSWORD_MAX_LEN = 63;
-constexpr size_t PRINTER_HOST_MAX_LEN = 63;
+constexpr size_t PRINTER_HOST_MAX_LEN = 255;
 constexpr size_t PRINTER_SERIAL_MAX_LEN = 31;
 constexpr size_t MQTT_USERNAME_MAX_LEN = 31;
 constexpr size_t ACCESS_CODE_MAX_LEN = 63;
@@ -19,14 +21,18 @@ constexpr bool ENABLE_LED_SYNC = true;  // Increase idle brightness when printer
 
 // Provisioning mode constants.
 constexpr uint32_t PROVISIONING_AP_TIMEOUT_MS = 15UL * 60UL * 1000UL;  // 15 minutes.
-constexpr uint32_t PROVISIONING_PAIRING_TTL_MS = 5UL * 60UL * 1000UL;  // 5 minutes.
-constexpr uint32_t PROVISIONING_SESSION_TTL_MS = 10UL * 60UL * 1000UL;  // 10 minutes.
+constexpr uint32_t PROVISIONING_AP_RESTART_BACKOFF_MS = 5000UL;
 constexpr uint32_t PROVISIONING_REBOOT_DELAY_MS = 1500UL;
 constexpr uint16_t PROVISIONING_HTTP_PORT = 80;
 constexpr uint16_t PROVISIONING_DNS_PORT = 53;
 constexpr size_t PROVISIONING_HTTP_MAX_BODY_BYTES = 1024;
-constexpr uint16_t PROVISIONING_RATE_LIMIT_WINDOW_MS = 60 * 1000;
+constexpr uint32_t PROVISIONING_RATE_LIMIT_WINDOW_MS = 60UL * 1000UL;
 constexpr uint8_t PROVISIONING_RATE_LIMIT_REQUESTS = 40;
+constexpr uint8_t PROVISIONING_RATE_LIMIT_SLOTS = 8;
+constexpr uint8_t PROVISIONING_SOFTAP_MAX_CLIENTS = 4;
+constexpr uint32_t PROVISIONING_DISPLAY_PAGE_MS = 4000UL;
+constexpr uint8_t PROVISIONING_QR_SCALE = 2;
+constexpr uint16_t IMPROV_SERIAL_MAX_PACKET_BYTES = 128;
 
 // Connectivity recovery: fall back into provisioning without erasing saved config.
 constexpr uint32_t WIFI_FAILURE_CHECK_INTERVAL_MS = 10UL * 1000UL;
@@ -70,5 +76,5 @@ constexpr uint8_t OLED_RESET_PIN = -1;  // Shared reset, not wired
 constexpr uint8_t OLED_I2C_ADDRESS = 0x3C;
 
 // Timing thresholds
-constexpr uint32_t STATUS_STALE_TIMEOUT_MS = 60000;  // 60 seconds keep-last window
+constexpr uint32_t STATUS_STALE_TIMEOUT_MS = 60000;   // 60 seconds keep-last window
 constexpr uint32_t FINISH_RECENT_WINDOW_MS = 300000;  // 5 minutes for finish recognition
