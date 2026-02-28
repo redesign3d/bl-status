@@ -1,28 +1,32 @@
 # Security Notes
 
 ## Threat Model
-- Provisioning happens on a local SoftAP and is treated as low-trust shared media.
-- Attackers on the same local RF network can attempt unauthorized provisioning or DoS.
-- Device secrets (Wi-Fi password, printer access code) must never be logged or hardcoded.
+- Provisioning over the setup AP is local and low-trust.
+- The setup AP is intentionally open, so any nearby client can associate while provisioning is active.
+- Improv provisioning shares the same trust boundary as physical serial access.
+- Wi-Fi passwords and printer access credentials are secrets and must never be logged or echoed back in responses.
 
 ## Provisioning Controls
-- Device enters provisioning only when config is missing/invalid or after explicit reset/recovery conditions.
-- Provisioning uses a dedicated SoftAP with:
-  - Unique SSID derived from MAC suffix.
-  - Random on-device generated WPA2 passphrase.
-  - Short-lived pairing code required to unlock configuration routes.
-- Pairing code and session state are RAM-only and expire automatically.
-- Captive DNS + HTTP services are only active in provisioning mode.
-- HTTP responses use no-store headers and avoid returning secret material.
+- Provisioning starts only when configuration is missing or invalid, after explicit reset, or after repeated runtime Wi-Fi failures.
+- The setup AP is named `BambuStatus-SETUP-XXXX` and serves a captive portal at `http://192.168.4.1/`.
+- Captive DNS and HTTP services run only during provisioning.
+- Provisioning is time-limited and cycles cleanly instead of remaining active forever.
+- HTTP handlers enforce body-size limits, field bounds, no-store headers, and per-client rate limits.
 
 ## Storage
-- Provisioned config is stored in NVS namespace `cfg`.
-- Config writes use a two-step commit:
-  1. Write all keys with `provisioned=0` and commit.
-  2. Re-open and verify stored fields pass validation.
-  3. Set `provisioned=1` only after verification succeeds.
-- Factory reset clears only provisioning keys in `cfg`.
+- Runtime config is stored only in NVS namespace `cfg`.
+- Config writes are atomic:
+  1. write all fields with `provisioned=0`
+  2. commit and re-open for verification
+  3. mark `provisioned=1` only after the verified readback passes validation
+- Factory reset clears only provisioning-related keys in `cfg`.
 
-## Reset / Reprovision
-- Authenticated provisioning endpoint `POST /reset` requires explicit confirmation token plus `ERASE`.
-- Repeated Wi-Fi connectivity failures trigger fallback into provisioning without auto-erasing saved secrets.
+## Improv Serial
+- The device implements Improv Wi-Fi over serial for Wi-Fi onboarding and installer integration.
+- Improv uses the same provisioning draft and the same NVS save path as the captive portal.
+- When only Wi-Fi is known, the device returns a local URL and keeps the setup portal active so the remaining printer settings can be completed on the LAN.
+
+## Reset / Recovery
+- The setup portal exposes `POST /reset`, but only while provisioning is active and only after explicit `ERASE` confirmation plus a per-session token.
+- Repeated Wi-Fi failures trigger provisioning fallback without automatically erasing saved config.
+- If NVS initialization fails because of exhausted or mismatched pages, the store attempts erase-and-reinit before giving up.
