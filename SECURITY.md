@@ -4,6 +4,7 @@
 - Provisioning over the setup AP is local and low-trust.
 - The setup AP is intentionally open, so any nearby client can associate while provisioning is active.
 - Improv provisioning shares the same trust boundary as physical serial access.
+- The local LAN portal is more convenient, but it is only enabled after the device has already joined the trusted LAN and it is protected with per-device authentication.
 - Wi-Fi passwords and printer access credentials are secrets and must never be logged or echoed back in responses.
 
 ## Provisioning Controls
@@ -13,8 +14,19 @@
 - Provisioning is time-limited and cycles cleanly instead of remaining active forever.
 - HTTP handlers enforce body-size limits, field bounds, no-store headers, and per-client rate limits.
 
+## Local Portal Security
+- After STA Wi-Fi is connected, the device advertises `http://bl-status-XXXX.local/` over mDNS with `_http._tcp`.
+- The local portal is disabled whenever provisioning mode is active or STA Wi-Fi is disconnected.
+- The local portal requires HTTP Basic Auth by default:
+  - username `admin`
+  - per-device password generated on first successful provisioning and stored in NVS namespace `auth`
+- The generated admin password is shown once on serial and on the OLED if present, then only stored in NVS.
+- State-changing POST routes require both Basic Auth and a per-process CSRF token.
+- Secret config fields are never rendered back to the browser. Empty secret inputs mean “keep current value”.
+
 ## Storage
 - Runtime config is stored only in NVS namespace `cfg`.
+- Local portal admin credentials are stored only in NVS namespace `auth`.
 - Config writes are atomic:
   1. write all fields with `provisioned=0`
   2. commit and re-open for verification
@@ -28,5 +40,7 @@
 
 ## Reset / Recovery
 - The setup portal exposes `POST /reset`, but only while provisioning is active and only after explicit `ERASE` confirmation plus a per-session token.
+- The local portal exposes authenticated reset and reboot actions.
+- If the local portal admin password is forgotten, the supported recovery path is factory reset followed by reprovisioning, which generates a new password.
 - Repeated Wi-Fi failures trigger provisioning fallback without automatically erasing saved config.
 - If NVS initialization fails because of exhausted or mismatched pages, the store attempts erase-and-reinit before giving up.
