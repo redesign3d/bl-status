@@ -18,6 +18,11 @@ constexpr uint16_t MIN_MQTT_PORT = 1;
 constexpr uint16_t MAX_MQTT_PORT = 65535;
 constexpr uint16_t DEFAULT_MQTT_TLS_PORT = 8883;
 constexpr const char* DEFAULT_MQTT_USERNAME = "bblp";
+constexpr const char* DEFAULT_ADMIN_USERNAME = "admin";
+constexpr size_t ADMIN_USERNAME_MAX_LEN = 16;
+constexpr size_t ADMIN_PASSWORD_MIN_LEN = 12;
+constexpr size_t ADMIN_PASSWORD_MAX_LEN = 32;
+constexpr size_t ADMIN_PASSWORD_GENERATED_LEN = 16;
 
 constexpr bool ENABLE_LED_SYNC = true;  // Increase idle brightness when printer light is on.
 
@@ -37,6 +42,8 @@ constexpr uint8_t PROVISIONING_QR_SCALE = 2;
 constexpr uint16_t IMPROV_SERIAL_MAX_PACKET_BYTES = 128;
 constexpr uint32_t IMPROV_WIFI_CONNECT_RETRY_MS = 500UL;
 constexpr uint8_t IMPROV_WIFI_CONNECT_ATTEMPTS = 20;
+constexpr uint16_t LOCAL_CONFIG_PORTAL_PORT = 80;
+constexpr size_t LOCAL_PORTAL_CSRF_TOKEN_LEN = 32;
 
 // Connectivity recovery: fall back into provisioning without erasing saved config.
 constexpr uint32_t WIFI_FAILURE_CHECK_INTERVAL_MS = 10UL * 1000UL;
