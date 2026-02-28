@@ -23,6 +23,7 @@ constexpr size_t ADMIN_USERNAME_MAX_LEN = 16;
 constexpr size_t ADMIN_PASSWORD_MIN_LEN = 12;
 constexpr size_t ADMIN_PASSWORD_MAX_LEN = 32;
 constexpr size_t ADMIN_PASSWORD_GENERATED_LEN = 16;
+constexpr uint32_t ADMIN_PASSWORD_ANNOUNCE_MS = 12000UL;
 
 constexpr bool ENABLE_LED_SYNC = true;  // Increase idle brightness when printer light is on.
 

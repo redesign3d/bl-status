@@ -9,8 +9,7 @@
 #include "nvs_config_store.h"
 
 namespace {
-constexpr char kPortalBaseHead[] PROGMEM =
-    "<!doctype html><html><head><meta charset='utf-8'><meta name='viewport' content='width=device-width,initial-scale=1'>"
+constexpr char kPortalHead[] PROGMEM =
     "<style>body{font-family:Arial,sans-serif;margin:20px auto;max-width:44rem;line-height:1.4;padding:0 12px}"
     "h1,h2{margin-bottom:.4rem}.card{padding:1rem;border:1px solid #ccc;border-radius:.8rem;background:#fafafa;margin:1rem 0}"
     "label{display:block;margin-top:.8rem;font-weight:600}input,select,button{width:100%;padding:.75rem;margin-top:.25rem;font:inherit;box-sizing:border-box}"
@@ -432,7 +431,7 @@ void LocalConfigPortal::sendLandingPage(const String& message, bool isError) {
   body += F("<!doctype html><html><head><meta charset='utf-8'><meta name='viewport' content='width=device-width,initial-scale=1'><title>");
   body += uiTitle;
   body += F("</title>");
-  body += FPSTR(kPortalBaseHead);
+  body += FPSTR(kPortalHead);
   body += F("<h1>");
   body += uiTitle;
   body += F("</h1><div class='card'><p><strong>Connected Wi-Fi:</strong> <code>");
@@ -471,7 +470,7 @@ void LocalConfigPortal::sendConfigPage(const String& message, bool isError) {
   body += F("<!doctype html><html><head><meta charset='utf-8'><meta name='viewport' content='width=device-width,initial-scale=1'><title>");
   body += uiTitle;
   body += F(" Config</title>");
-  body += FPSTR(kPortalBaseHead);
+  body += FPSTR(kPortalHead);
   body += F("<h1>");
   body += uiTitle;
   body += F("</h1><p>Reach this device at <code>http://");
@@ -529,7 +528,7 @@ void LocalConfigPortal::sendResultPage(int code, const String& title, const Stri
   body += F("<!doctype html><html><head><meta charset='utf-8'><meta name='viewport' content='width=device-width,initial-scale=1'><title>");
   body += uiTitle;
   body += F("</title>");
-  body += FPSTR(kPortalBaseHead);
+  body += FPSTR(kPortalHead);
   body += F("<h1>");
   body += uiTitle;
   body += F("</h1><h2>");

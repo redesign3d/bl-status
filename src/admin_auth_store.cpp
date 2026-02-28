@@ -166,6 +166,9 @@ bool clearAdminCredentials() {
 
   nvs_handle_t handle = 0;
   const esp_err_t openErr = nvs_open(kNamespace, NVS_READWRITE, &handle);
+  if (openErr == ESP_ERR_NVS_NOT_FOUND) {
+    return true;
+  }
   if (openErr != ESP_OK) {
     return false;
   }
