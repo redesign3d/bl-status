@@ -21,7 +21,7 @@ class PrinterClient {
   bool isMqttConnected();
 
  private:
-  void ensureWifi();
+  bool ensureWifi();
   void ensureMqtt();
   void handleMessage(char* topic, uint8_t* payload, unsigned int length);
   void applyStatusFromJson(JsonVariantConst printNode);

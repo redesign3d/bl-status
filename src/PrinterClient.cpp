@@ -61,7 +61,10 @@ void PrinterClient::loop() {
   if (!config_) {
     return;
   }
-  ensureWifi();
+  const bool wifiJustConnected = ensureWifi();
+  if (wifiJustConnected) {
+    return;
+  }
   ensureMqtt();
 
   if (mqttClient_.connected()) {
@@ -82,7 +85,7 @@ bool PrinterClient::isWifiConnected() const { return WiFi.status() == WL_CONNECT
 
 bool PrinterClient::isMqttConnected() { return mqttClient_.connected(); }
 
-void PrinterClient::ensureWifi() {
+bool PrinterClient::ensureWifi() {
   unsigned long now = millis();
   wl_status_t status = WiFi.status();
 
@@ -90,8 +93,9 @@ void PrinterClient::ensureWifi() {
     if (!wifiReportedConnected_) {
       Serial.printf("WiFi connected: %s\n", WiFi.localIP().toString().c_str());
       wifiReportedConnected_ = true;
+      return true;
     }
-    return;
+    return false;
   }
 
   if (wifiReportedConnected_) {
@@ -100,7 +104,7 @@ void PrinterClient::ensureWifi() {
   }
 
   if (now - lastWifiAttemptMs_ < WIFI_RETRY_INTERVAL_MS) {
-    return;
+    return false;
   }
 
   lastWifiAttemptMs_ = now;
@@ -110,6 +114,7 @@ void PrinterClient::ensureWifi() {
   } else {
     WiFi.begin(config_->wifiSsid, config_->wifiPassword);
   }
+  return false;
 }
 
 void PrinterClient::ensureMqtt() {
