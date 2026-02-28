@@ -1,13 +1,19 @@
 #include "provisioning_manager.h"
 
 #include <WiFi.h>
+#include <esp_random.h>
 #include <string.h>
 
 #include "nvs_config_store.h"
 
+namespace {
+char toHexNibble(uint8_t nibble) { return (nibble < 10) ? static_cast<char>('0' + nibble) : static_cast<char>('A' + (nibble - 10)); }
+}  // namespace
+
 ProvisioningManager::ProvisioningManager()
     : state_(ProvisioningState::BOOT),
       hasActiveConfig_(false),
+      provisioningCompletePending_(false),
       apIp_(192, 168, 4, 1),
       provisioningDeadlineMs_(0),
       rebootAtMs_(0),
@@ -16,7 +22,9 @@ ProvisioningManager::ProvisioningManager()
       wifiFailureCount_(0),
       wifiFailureThreshold_(WIFI_FAILURE_THRESHOLD_BASE) {
   clearDeviceConfig(&activeConfig_);
+  clearDeviceConfig(&draftConfig_);
   memset(apSsid_, 0, sizeof(apSsid_));
+  memset(resetToken_, 0, sizeof(resetToken_));
 }
 
 void ProvisioningManager::begin() {
@@ -57,6 +65,14 @@ void ProvisioningManager::loop(uint32_t nowMs) {
   if (state_ == ProvisioningState::PROVISIONING_ACTIVE) {
     dns_.loop();
     http_.loop(nowMs);
+
+    if (provisioningCompletePending_) {
+      provisioningCompletePending_ = false;
+      Serial.println("Provisioning successful; scheduling reboot");
+      stopProvisioning();
+      scheduleReboot(nowMs);
+      return;
+    }
 
     if (nowMs > provisioningDeadlineMs_) {
       Serial.println("Provisioning window expired; cycling setup services");
@@ -119,15 +135,59 @@ void ProvisioningManager::notifyConnectivity(bool wifiConnected, uint32_t nowMs)
 }
 
 void ProvisioningManager::requestFactoryReset() {
-  if (!clearProvisionedConfig()) {
-    Serial.println("Factory reset request failed");
-    return;
-  }
-  clearDeviceConfig(&activeConfig_);
-  hasActiveConfig_ = false;
+  char message[96];
+  resetProvisioningConfig(message, sizeof(message));
   stopProvisioning();
   state_ = ProvisioningState::ENTER_PROVISIONING;
   nextProvisionRetryMs_ = millis();
+}
+
+bool ProvisioningManager::applySubmittedConfig(const DeviceConfig& config, char* message, size_t messageLen) {
+  if (message && messageLen > 0) {
+    message[0] = '\0';
+  }
+
+  if (!saveProvisionedConfig(config)) {
+    if (message && messageLen > 0) {
+      strlcpy(message, "Configuration save failed.", messageLen);
+    }
+    return false;
+  }
+
+  if (!loadConfigFromNvs()) {
+    if (message && messageLen > 0) {
+      strlcpy(message, "Configuration verify failed.", messageLen);
+    }
+    return false;
+  }
+
+  provisioningCompletePending_ = true;
+  if (message && messageLen > 0) {
+    strlcpy(message, "Saved. Rebooting now.", messageLen);
+  }
+  return true;
+}
+
+bool ProvisioningManager::resetProvisioningConfig(char* message, size_t messageLen) {
+  if (message && messageLen > 0) {
+    message[0] = '\0';
+  }
+
+  if (!clearProvisionedConfig()) {
+    if (message && messageLen > 0) {
+      strlcpy(message, "Configuration erase failed.", messageLen);
+    }
+    return false;
+  }
+
+  clearDeviceConfig(&activeConfig_);
+  clearDeviceConfig(&draftConfig_);
+  hasActiveConfig_ = false;
+  http_.setDraftConfig(nullptr);
+  if (message && messageLen > 0) {
+    strlcpy(message, "Configuration erased. Device remains in setup mode.", messageLen);
+  }
+  return true;
 }
 
 bool ProvisioningManager::loadConfigFromNvs() {
@@ -137,6 +197,7 @@ bool ProvisioningManager::loadConfigFromNvs() {
     return false;
   }
   activeConfig_ = loaded;
+  draftConfig_ = loaded;
   hasActiveConfig_ = true;
   wifiFailureCount_ = 0;
   lastWifiFailureCheckMs_ = millis();
@@ -146,9 +207,20 @@ bool ProvisioningManager::loadConfigFromNvs() {
 bool ProvisioningManager::startProvisioning(uint32_t nowMs) {
   stopProvisioning();
   buildProvisioningSsid();
+  generateResetToken();
+  provisioningCompletePending_ = false;
+
+  if (hasActiveConfig_) {
+    draftConfig_ = activeConfig_;
+  } else {
+    clearDeviceConfig(&draftConfig_);
+    draftConfig_.printerPort = DEFAULT_MQTT_TLS_PORT;
+    draftConfig_.tlsInsecure = DEFAULT_TLS_INSECURE;
+  }
 
   if (!softAp_.begin(apSsid_)) {
     Serial.println("Failed to start setup SoftAP");
+    memset(resetToken_, 0, sizeof(resetToken_));
     return false;
   }
   apIp_ = softAp_.ip();
@@ -159,11 +231,12 @@ bool ProvisioningManager::startProvisioning(uint32_t nowMs) {
     return false;
   }
 
-  if (!http_.begin(PROVISIONING_HTTP_PORT, apSsid_, apIp_)) {
+  if (!http_.begin(PROVISIONING_HTTP_PORT, apSsid_, apIp_, resetToken_, this)) {
     Serial.println("Failed to start captive HTTP");
     stopProvisioning();
     return false;
   }
+  http_.setDraftConfig(&draftConfig_);
 
   provisioningDeadlineMs_ = nowMs + PROVISIONING_AP_TIMEOUT_MS;
 
@@ -181,6 +254,7 @@ void ProvisioningManager::stopProvisioning() {
   http_.stop();
   dns_.stop();
   softAp_.stop();
+  memset(resetToken_, 0, sizeof(resetToken_));
 }
 
 void ProvisioningManager::scheduleReboot(uint32_t nowMs) {
@@ -193,3 +267,12 @@ void ProvisioningManager::buildProvisioningSsid() {
   WiFi.macAddress(mac);
   snprintf(apSsid_, sizeof(apSsid_), "%s-SETUP-%02X%02X", PRODUCT_NAME, mac[4], mac[5]);
 }
+
+void ProvisioningManager::generateResetToken() {
+  for (size_t i = 0; i < sizeof(resetToken_) - 1; ++i) {
+    resetToken_[i] = toHexNibble(randomByte() & 0x0F);
+  }
+  resetToken_[sizeof(resetToken_) - 1] = '\0';
+}
+
+uint8_t ProvisioningManager::randomByte() { return static_cast<uint8_t>(esp_random() & 0xFF); }

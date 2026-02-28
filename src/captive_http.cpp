@@ -1,55 +1,80 @@
 #include "captive_http.h"
 
+#include <ctype.h>
 #include <string.h>
 
-#include "config.h"
+#include "nvs_config_store.h"
 
 namespace {
-constexpr char kPortalUrl[] = "http://192.168.4.1/";
-constexpr char kPortalPageTop[] PROGMEM =
+constexpr char kPortalPageHead[] PROGMEM =
     "<!doctype html><html><head><meta charset='utf-8'><meta name='viewport' "
     "content='width=device-width,initial-scale=1'><title>Bambu Status Setup</title>"
-    "<style>body{font-family:Arial,sans-serif;margin:20px;max-width:42rem;line-height:1.4}"
-    "h1{margin-bottom:.25rem}ol{padding-left:1.2rem}code,input,button{font:inherit}"
-    ".card{padding:1rem;border:1px solid #ccc;border-radius:.75rem;background:#fafafa}"
-    "</style></head><body><h1>Bambu Status Setup</h1>"
-    "<p>Connect to the setup Wi-Fi, then open <code>http://192.168.4.1/</code> if this page did not open automatically.</p>"
-    "<div class='card'><ol><li>Join the open setup network.</li><li>Open <code>192.168.4.1</code>.</li>"
-    "<li>Enter your Wi-Fi and printer settings.</li></ol></div><p><strong>Setup SSID:</strong> ";
-constexpr char kPortalPageBottom[] PROGMEM =
-    "</p><p><strong>Setup IP:</strong> <code>192.168.4.1</code></p>"
-    "<p>The configuration form will appear here in the next firmware step.</p></body></html>";
+    "<style>body{font-family:Arial,sans-serif;margin:20px auto;max-width:42rem;line-height:1.4;padding:0 12px}"
+    "h1,h2{margin-bottom:.4rem}.card{padding:1rem;border:1px solid #ccc;border-radius:.8rem;background:#fafafa;margin:1rem 0}"
+    "label{display:block;margin-top:.8rem;font-weight:600}input,select,button{width:100%;padding:.75rem;margin-top:.25rem;font:inherit;box-sizing:border-box}"
+    "button{cursor:pointer}.status{padding:.8rem;border-radius:.6rem}.ok{background:#edf7ed;color:#155724}.err{background:#fdecea;color:#721c24}"
+    "small{display:block;color:#555;margin-top:.25rem}code{font-family:monospace}</style></head><body>";
+constexpr char kPortalPageIntro[] PROGMEM =
+    "<h1>Bambu Status Setup</h1><p>Connect to the open setup Wi-Fi, then open <code>192.168.4.1</code> if this page did not open automatically.</p>"
+    "<div class='card'><ol><li>Join the setup network.</li><li>Open <code>http://192.168.4.1/</code>.</li><li>Enter Wi-Fi and printer details.</li><li>Save and wait for reboot.</li></ol></div>";
+constexpr char kPortalPageTail[] PROGMEM = "</body></html>";
+constexpr char kPortalUrl[] = "http://192.168.4.1/";
+
+bool isPrintableAscii(const char* value) {
+  if (!value) {
+    return false;
+  }
+  for (size_t i = 0; value[i] != '\0'; ++i) {
+    const unsigned char c = static_cast<unsigned char>(value[i]);
+    if (c < 0x20 || c > 0x7E) {
+      return false;
+    }
+  }
+  return true;
+}
 }  // namespace
 
-CaptiveHttp::CaptiveHttp() : server_(nullptr), running_(false), nowMs_(0) {
+CaptiveHttp::CaptiveHttp()
+    : server_(nullptr), handler_(nullptr), running_(false), nowMs_(0), hasDraftConfig_(false) {
   memset(apSsid_, 0, sizeof(apSsid_));
   memset(apIp_, 0, sizeof(apIp_));
+  memset(resetToken_, 0, sizeof(resetToken_));
+  clearDeviceConfig(&draftConfig_);
   memset(rateSlots_, 0, sizeof(rateSlots_));
 }
 
 CaptiveHttp::~CaptiveHttp() { stop(); }
 
-bool CaptiveHttp::begin(uint16_t port, const char* apSsid, const IPAddress& apIp) {
+bool CaptiveHttp::begin(uint16_t port, const char* apSsid, const IPAddress& apIp, const char* resetToken,
+                        CaptiveHttpHandler* handler) {
   stop();
-  if (!apSsid || apSsid[0] == '\0') {
+  if (!apSsid || apSsid[0] == '\0' || !resetToken || !handler) {
     return false;
   }
 
   strlcpy(apSsid_, apSsid, sizeof(apSsid_));
   strlcpy(apIp_, apIp.toString().c_str(), sizeof(apIp_));
+  strlcpy(resetToken_, resetToken, sizeof(resetToken_));
+  handler_ = handler;
   memset(rateSlots_, 0, sizeof(rateSlots_));
 
   server_ = new WebServer(port);
   if (!server_) {
+    handler_ = nullptr;
     return false;
   }
 
+  const char* headers[] = {"Content-Length"};
+  server_->collectHeaders(headers, 1);
   server_->on("/", HTTP_GET, [this]() { handleRoot(); });
   server_->on("/health", HTTP_GET, [this]() { handleHealth(); });
+  server_->on("/provision", HTTP_POST, [this]() { handleProvision(); });
+  server_->on("/reset", HTTP_POST, [this]() { handleReset(); });
   server_->on("/generate_204", HTTP_ANY, [this]() { handleCaptiveProbe(); });
   server_->on("/hotspot-detect.html", HTTP_ANY, [this]() { handleCaptiveProbe(); });
   server_->on("/connecttest.txt", HTTP_ANY, [this]() { handleCaptiveProbe(); });
   server_->on("/ncsi.txt", HTTP_ANY, [this]() { handleCaptiveProbe(); });
+  server_->on("/fwlink", HTTP_ANY, [this]() { handleCaptiveProbe(); });
   server_->onNotFound([this]() { handleNotFound(); });
   server_->begin();
   running_ = true;
@@ -70,12 +95,26 @@ void CaptiveHttp::stop() {
     delete server_;
     server_ = nullptr;
   }
+  handler_ = nullptr;
   running_ = false;
+  hasDraftConfig_ = false;
+  clearDeviceConfig(&draftConfig_);
   memset(apSsid_, 0, sizeof(apSsid_));
   memset(apIp_, 0, sizeof(apIp_));
+  memset(resetToken_, 0, sizeof(resetToken_));
 }
 
 bool CaptiveHttp::isRunning() const { return running_; }
+
+void CaptiveHttp::setDraftConfig(const DeviceConfig* draftConfig) {
+  if (!draftConfig) {
+    hasDraftConfig_ = false;
+    clearDeviceConfig(&draftConfig_);
+    return;
+  }
+  draftConfig_ = *draftConfig;
+  hasDraftConfig_ = true;
+}
 
 bool CaptiveHttp::allowRequest() {
   if (!server_) {
@@ -113,11 +152,255 @@ bool CaptiveHttp::allowRequest() {
     }
   }
 
-  int useIndex = (freeIndex >= 0) ? freeIndex : oldestIndex;
+  const int useIndex = (freeIndex >= 0) ? freeIndex : oldestIndex;
   rateSlots_[useIndex].used = true;
   rateSlots_[useIndex].ip = ip;
   rateSlots_[useIndex].windowStartMs = nowMs_;
   rateSlots_[useIndex].count = 1;
+  return true;
+}
+
+bool CaptiveHttp::isAllowedField(const String& name) const {
+  return name == "wifiSsid" || name == "wifiPassword" || name == "printerHost" || name == "printerPort" ||
+         name == "printerSerial" || name == "mqttUsername" || name == "accessCode" || name == "tlsInsecure";
+}
+
+bool CaptiveHttp::hasDisallowedControlChars(const String& value) const {
+  for (size_t i = 0; i < value.length(); ++i) {
+    const unsigned char c = static_cast<unsigned char>(value[i]);
+    if (c == 0 || c < 0x20 || c > 0x7E) {
+      return true;
+    }
+  }
+  return false;
+}
+
+bool CaptiveHttp::containsOnlyTokenChars(const char* value) const {
+  if (!value) {
+    return false;
+  }
+  for (size_t i = 0; value[i] != '\0'; ++i) {
+    const unsigned char c = static_cast<unsigned char>(value[i]);
+    if (!(isalnum(c) || c == '-' || c == '_' || c == '.')) {
+      return false;
+    }
+  }
+  return true;
+}
+
+bool CaptiveHttp::isValidHostValue(const char* host) const {
+  if (!host) {
+    return false;
+  }
+  const size_t len = strlen(host);
+  if (len == 0 || len > PRINTER_HOST_MAX_LEN) {
+    return false;
+  }
+  IPAddress ip;
+  if (ip.fromString(host)) {
+    return true;
+  }
+  if (host[0] == '.' || host[0] == '-' || host[len - 1] == '.' || host[len - 1] == '-') {
+    return false;
+  }
+  for (size_t i = 0; i < len; ++i) {
+    const unsigned char c = static_cast<unsigned char>(host[i]);
+    if (!(isalnum(c) || c == '.' || c == '-')) {
+      return false;
+    }
+  }
+  return true;
+}
+
+bool CaptiveHttp::parseBooleanArg(const String& value, bool* outValue) const {
+  if (!outValue) {
+    return false;
+  }
+  if (value == "1" || value == "true" || value == "on") {
+    *outValue = true;
+    return true;
+  }
+  if (value == "0" || value == "false" || value == "off") {
+    *outValue = false;
+    return true;
+  }
+  return false;
+}
+
+void CaptiveHttp::appendInvalidField(String* errorMessage, bool* firstField,
+                                     const __FlashStringHelper* fieldLabel) const {
+  if (!errorMessage || !firstField || !fieldLabel) {
+    return;
+  }
+  if (*firstField) {
+    *errorMessage = F("Invalid or missing fields: ");
+    *firstField = false;
+  } else {
+    *errorMessage += F(", ");
+  }
+  *errorMessage += fieldLabel;
+}
+
+String CaptiveHttp::htmlEscape(const char* value) const {
+  String out;
+  if (!value) {
+    return out;
+  }
+  out.reserve(strlen(value) + 8);
+  for (size_t i = 0; value[i] != '\0'; ++i) {
+    switch (value[i]) {
+      case '&':
+        out += F("&amp;");
+        break;
+      case '<':
+        out += F("&lt;");
+        break;
+      case '>':
+        out += F("&gt;");
+        break;
+      case '\"':
+        out += F("&quot;");
+        break;
+      case '\'':
+        out += F("&#39;");
+        break;
+      default:
+        out += value[i];
+        break;
+    }
+  }
+  return out;
+}
+
+bool CaptiveHttp::parseConfigFromRequest(DeviceConfig* outConfig, String* errorMessage) {
+  if (!server_ || !outConfig || !errorMessage) {
+    return false;
+  }
+
+  if (server_->hasHeader("Content-Length")) {
+    const long bodySize = server_->header("Content-Length").toInt();
+    if (bodySize < 0 || bodySize > static_cast<long>(PROVISIONING_HTTP_MAX_BODY_BYTES)) {
+      *errorMessage = F("Request body too large.");
+      return false;
+    }
+  }
+
+  for (int i = 0; i < server_->args(); ++i) {
+    if (!isAllowedField(server_->argName(i))) {
+      *errorMessage = F("Unexpected form field.");
+      return false;
+    }
+  }
+
+  DeviceConfig merged{};
+  if (hasDraftConfig_) {
+    merged = draftConfig_;
+  } else {
+    clearDeviceConfig(&merged);
+    merged.printerPort = DEFAULT_MQTT_TLS_PORT;
+    merged.tlsInsecure = DEFAULT_TLS_INSECURE;
+  }
+
+  const String wifiSsid = server_->arg("wifiSsid");
+  const String wifiPassword = server_->arg("wifiPassword");
+  const String printerHost = server_->arg("printerHost");
+  const String printerPort = server_->arg("printerPort");
+  const String printerSerial = server_->arg("printerSerial");
+  const String mqttUsername = server_->arg("mqttUsername");
+  const String accessCode = server_->arg("accessCode");
+  const String tlsInsecure = server_->arg("tlsInsecure");
+
+  const String values[] = {wifiSsid, wifiPassword, printerHost, printerPort, printerSerial, mqttUsername, accessCode,
+                           tlsInsecure};
+  for (const String& value : values) {
+    if (value.length() > PROVISIONING_HTTP_MAX_BODY_BYTES || hasDisallowedControlChars(value)) {
+      *errorMessage = F("Request contains invalid characters.");
+      clearDeviceConfig(&merged);
+      return false;
+    }
+  }
+
+  if (wifiSsid.length() > 0) {
+    strlcpy(merged.wifiSsid, wifiSsid.c_str(), sizeof(merged.wifiSsid));
+  }
+  if (wifiPassword.length() > 0) {
+    strlcpy(merged.wifiPassword, wifiPassword.c_str(), sizeof(merged.wifiPassword));
+  }
+  if (printerHost.length() > 0) {
+    strlcpy(merged.printerHost, printerHost.c_str(), sizeof(merged.printerHost));
+  }
+  if (printerPort.length() > 0) {
+    const long parsedPort = printerPort.toInt();
+    if (parsedPort <= 0 || parsedPort > 65535) {
+      *errorMessage = F("Invalid or missing fields: printerPort");
+      clearDeviceConfig(&merged);
+      return false;
+    }
+    merged.printerPort = static_cast<uint16_t>(parsedPort);
+  }
+  if (printerSerial.length() > 0) {
+    strlcpy(merged.printerSerial, printerSerial.c_str(), sizeof(merged.printerSerial));
+  }
+  if (mqttUsername.length() > 0) {
+    strlcpy(merged.mqttUsername, mqttUsername.c_str(), sizeof(merged.mqttUsername));
+  }
+  if (accessCode.length() > 0) {
+    strlcpy(merged.accessCode, accessCode.c_str(), sizeof(merged.accessCode));
+  }
+  if (tlsInsecure.length() > 0) {
+    bool parsedBool = false;
+    if (!parseBooleanArg(tlsInsecure, &parsedBool)) {
+      *errorMessage = F("Invalid or missing fields: tlsInsecure");
+      clearDeviceConfig(&merged);
+      return false;
+    }
+    merged.tlsInsecure = parsedBool;
+  }
+
+  bool firstField = true;
+  errorMessage->remove(0);
+
+  const size_t wifiSsidLen = strlen(merged.wifiSsid);
+  if (wifiSsidLen == 0 || wifiSsidLen > WIFI_SSID_MAX_LEN || !isPrintableAscii(merged.wifiSsid)) {
+    appendInvalidField(errorMessage, &firstField, F("wifiSsid"));
+  }
+  const size_t wifiPasswordLen = strlen(merged.wifiPassword);
+  if (wifiPasswordLen < 8 || wifiPasswordLen > WIFI_PASSWORD_MAX_LEN || !isPrintableAscii(merged.wifiPassword)) {
+    appendInvalidField(errorMessage, &firstField, F("wifiPassword"));
+  }
+  if (!isValidHostValue(merged.printerHost)) {
+    appendInvalidField(errorMessage, &firstField, F("printerHost"));
+  }
+  if (merged.printerPort < MIN_MQTT_PORT || merged.printerPort > MAX_MQTT_PORT) {
+    appendInvalidField(errorMessage, &firstField, F("printerPort"));
+  }
+  const size_t printerSerialLen = strlen(merged.printerSerial);
+  if (printerSerialLen < 6 || printerSerialLen > PRINTER_SERIAL_MAX_LEN || !containsOnlyTokenChars(merged.printerSerial)) {
+    appendInvalidField(errorMessage, &firstField, F("printerSerial"));
+  }
+  const size_t mqttUsernameLen = strlen(merged.mqttUsername);
+  if (mqttUsernameLen == 0 || mqttUsernameLen > MQTT_USERNAME_MAX_LEN ||
+      !containsOnlyTokenChars(merged.mqttUsername)) {
+    appendInvalidField(errorMessage, &firstField, F("mqttUsername"));
+  }
+  const size_t accessCodeLen = strlen(merged.accessCode);
+  if (accessCodeLen < 4 || accessCodeLen > ACCESS_CODE_MAX_LEN || !containsOnlyTokenChars(merged.accessCode)) {
+    appendInvalidField(errorMessage, &firstField, F("accessCode"));
+  }
+
+  if (!firstField) {
+    clearDeviceConfig(&merged);
+    return false;
+  }
+
+  ConfigValidationResult validation = validateDeviceConfig(merged);
+  if (!validation.ok) {
+    *errorMessage = F("Configuration rejected.");
+    clearDeviceConfig(&merged);
+    return false;
+  }
+
+  *outConfig = merged;
   return true;
 }
 
@@ -134,21 +417,90 @@ void CaptiveHttp::sendSecurityHeaders() {
                       "default-src 'self'; style-src 'unsafe-inline' 'self'; form-action 'self'; base-uri 'none'");
 }
 
-void CaptiveHttp::sendPortalPage() {
+void CaptiveHttp::sendPortalPage(const String& message, bool isError) {
   sendSecurityHeaders();
-  server_->setContentLength(CONTENT_LENGTH_UNKNOWN);
-  server_->send(200, "text/html", "");
-  server_->sendContent_P(kPortalPageTop);
-  server_->sendContent(apSsid_);
-  server_->sendContent_P(kPortalPageBottom);
-  server_->sendContent("");
+
+  const String wifiSsidValue = htmlEscape(draftConfig_.wifiSsid);
+  const String printerHostValue = htmlEscape(draftConfig_.printerHost);
+  const String printerSerialValue = htmlEscape(draftConfig_.printerSerial);
+  const String mqttUsernameValue = htmlEscape(draftConfig_.mqttUsername);
+  const String setupSsidValue = htmlEscape(apSsid_);
+  const bool keepWifiPassword = hasDraftConfig_ && draftConfig_.wifiPassword[0] != '\0';
+  const bool keepAccessCode = hasDraftConfig_ && draftConfig_.accessCode[0] != '\0';
+
+  String body;
+  body.reserve(4400);
+  body += FPSTR(kPortalPageHead);
+  body += FPSTR(kPortalPageIntro);
+  if (message.length() > 0) {
+    body += F("<p class='status ");
+    body += isError ? F("err") : F("ok");
+    body += F("'><strong>");
+    body += htmlEscape(message.c_str());
+    body += F("</strong></p>");
+  }
+  body += F("<div class='card'><p><strong>Setup SSID:</strong> <code>");
+  body += setupSsidValue;
+  body += F("</code><br><strong>Setup URL:</strong> <code>");
+  body += apIp_;
+  body += F("</code></p><form method='POST' action='/provision' autocomplete='off' accept-charset='utf-8'>");
+  body += F("<label for='wifiSsid'>Wi-Fi SSID</label><input id='wifiSsid' name='wifiSsid' maxlength='32' value='");
+  body += wifiSsidValue;
+  body += F("' autocapitalize='none' spellcheck='false'>");
+  body += F("<label for='wifiPassword'>Wi-Fi Password</label><input id='wifiPassword' type='password' name='wifiPassword' maxlength='63' autocomplete='new-password'>");
+  if (keepWifiPassword) {
+    body += F("<small>Leave blank to keep the current Wi-Fi password.</small>");
+  }
+  body += F("<label for='printerHost'>Printer Host</label><input id='printerHost' name='printerHost' maxlength='255' value='");
+  body += printerHostValue;
+  body += F("' autocapitalize='none' spellcheck='false'>");
+  body += F("<label for='printerPort'>Printer MQTT Port</label><input id='printerPort' name='printerPort' inputmode='numeric' value='");
+  body += String(hasDraftConfig_ && draftConfig_.printerPort != 0 ? draftConfig_.printerPort : DEFAULT_MQTT_TLS_PORT);
+  body += F("'>");
+  body += F("<label for='printerSerial'>Printer Serial</label><input id='printerSerial' name='printerSerial' maxlength='31' value='");
+  body += printerSerialValue;
+  body += F("' autocapitalize='none' spellcheck='false'>");
+  body += F("<label for='mqttUsername'>MQTT Username</label><input id='mqttUsername' name='mqttUsername' maxlength='31' value='");
+  body += mqttUsernameValue;
+  body += F("' autocapitalize='none' spellcheck='false'>");
+  body += F("<label for='accessCode'>Access Code</label><input id='accessCode' type='password' name='accessCode' maxlength='63' autocomplete='new-password'>");
+  if (keepAccessCode) {
+    body += F("<small>Leave blank to keep the current printer access code.</small>");
+  }
+  body += F("<label for='tlsInsecure'>TLS</label><select id='tlsInsecure' name='tlsInsecure'>");
+  body += draftConfig_.tlsInsecure ? F("<option value='0'>Validate certificate</option><option value='1' selected>Insecure (LAN only)</option>")
+                                   : F("<option value='0' selected>Validate certificate</option><option value='1'>Insecure (LAN only)</option>");
+  body += F("</select><button type='submit'>Save And Reboot</button></form></div>");
+  body += F("<div class='card'><h2>Reset Config</h2><p>Erase provisioned settings and stay in setup mode.</p>");
+  body += F("<form method='POST' action='/reset' autocomplete='off'><input type='hidden' name='confirm_token' value='");
+  body += resetToken_;
+  body += F("'><label for='confirm'>Type ERASE to confirm</label><input id='confirm' name='confirm' maxlength='5' autocapitalize='characters'>");
+  body += F("<button type='submit'>Reset Configuration</button></form></div>");
+  body += FPSTR(kPortalPageTail);
+  server_->send(200, "text/html", body);
+}
+
+void CaptiveHttp::sendResultPage(int code, const String& title, const String& message) {
+  sendSecurityHeaders();
+  String body;
+  body.reserve(1200);
+  body += FPSTR(kPortalPageHead);
+  body += F("<h1>");
+  body += htmlEscape(title.c_str());
+  body += F("</h1><p class='status ");
+  body += (code >= 400) ? F("err") : F("ok");
+  body += F("'><strong>");
+  body += htmlEscape(message.c_str());
+  body += F("</strong></p><p><a href='/'>Return to setup</a></p>");
+  body += FPSTR(kPortalPageTail);
+  server_->send(code, "text/html", body);
 }
 
 void CaptiveHttp::sendHealth() {
   sendSecurityHeaders();
-  char body[160];
+  char body[192];
   snprintf(body, sizeof(body),
-           "{\"state\":\"provisioning\",\"apSsid\":\"%s\",\"portal\":\"%s\"}",
+           "{\"state\":\"provisioning\",\"apSsid\":\"%s\",\"portal\":\"%s\",\"resetAvailable\":true}",
            apSsid_, kPortalUrl);
   server_->send(200, "application/json", body);
 }
@@ -164,12 +516,17 @@ void CaptiveHttp::sendTooManyRequests() {
   server_->send(429, "text/plain", "Too many requests");
 }
 
+void CaptiveHttp::sendPayloadTooLarge() {
+  sendSecurityHeaders();
+  server_->send(413, "text/plain", "Payload too large");
+}
+
 void CaptiveHttp::handleRoot() {
   if (!allowRequest()) {
     sendTooManyRequests();
     return;
   }
-  sendPortalPage();
+  sendPortalPage(String(), false);
 }
 
 void CaptiveHttp::handleHealth() {
@@ -178,6 +535,70 @@ void CaptiveHttp::handleHealth() {
     return;
   }
   sendHealth();
+}
+
+void CaptiveHttp::handleProvision() {
+  if (!allowRequest()) {
+    sendTooManyRequests();
+    return;
+  }
+  if (!handler_) {
+    sendResultPage(500, F("Setup Error"), F("Provisioning backend unavailable."));
+    return;
+  }
+  if (server_->hasHeader("Content-Length")) {
+    const long bodySize = server_->header("Content-Length").toInt();
+    if (bodySize < 0 || bodySize > static_cast<long>(PROVISIONING_HTTP_MAX_BODY_BYTES)) {
+      sendPayloadTooLarge();
+      return;
+    }
+  }
+
+  DeviceConfig submitted{};
+  String errorMessage;
+  if (!parseConfigFromRequest(&submitted, &errorMessage)) {
+    sendPortalPage(errorMessage, true);
+    clearDeviceConfig(&submitted);
+    return;
+  }
+
+  char message[96];
+  memset(message, 0, sizeof(message));
+  const bool ok = handler_->applySubmittedConfig(submitted, message, sizeof(message));
+  clearDeviceConfig(&submitted);
+  if (!ok) {
+    sendResultPage(500, F("Save Failed"), message[0] != '\0' ? String(message) : String(F("Unable to save configuration.")));
+    return;
+  }
+
+  sendResultPage(200, F("Configuration Saved"),
+                 message[0] != '\0' ? String(message) : String(F("Saved. Rebooting now.")));
+}
+
+void CaptiveHttp::handleReset() {
+  if (!allowRequest()) {
+    sendTooManyRequests();
+    return;
+  }
+  if (!handler_) {
+    sendResultPage(500, F("Reset Error"), F("Provisioning backend unavailable."));
+    return;
+  }
+  if (!server_->hasArg("confirm_token") || !server_->hasArg("confirm") || server_->arg("confirm_token") != resetToken_ ||
+      server_->arg("confirm") != "ERASE") {
+    sendPortalPage(F("Reset request rejected. Type ERASE to confirm."), true);
+    return;
+  }
+
+  char message[96];
+  memset(message, 0, sizeof(message));
+  const bool ok = handler_->resetProvisioningConfig(message, sizeof(message));
+  if (!ok) {
+    sendResultPage(500, F("Reset Failed"), message[0] != '\0' ? String(message) : String(F("Unable to clear configuration.")));
+    return;
+  }
+  sendResultPage(200, F("Configuration Cleared"),
+                 message[0] != '\0' ? String(message) : String(F("Configuration erased. Device remains in setup mode.")));
 }
 
 void CaptiveHttp::handleCaptiveProbe() {
