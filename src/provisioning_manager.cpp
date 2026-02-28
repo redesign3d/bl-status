@@ -4,6 +4,7 @@
 #include <esp_random.h>
 #include <string.h>
 
+#include "LedController.h"
 #include "LogRedaction.h"
 #include "device_identity.h"
 #include "nvs_config_store.h"
@@ -204,6 +205,64 @@ bool ProvisioningManager::resetProvisioningConfig(char* message, size_t messageL
   refreshDraftInPortal();
   if (message && messageLen > 0) {
     strlcpy(message, "Configuration erased. Device remains in setup mode.", messageLen);
+  }
+  return true;
+}
+
+bool ProvisioningManager::loadActiveLedConfig(LedBehaviorConfig* outConfig) const {
+  if (!outConfig) {
+    return false;
+  }
+  const LedBehaviorConfig* activeLed = currentLedBehaviorConfig();
+  if (activeLed) {
+    *outConfig = *activeLed;
+    return true;
+  }
+  return loadLedBehaviorConfig(outConfig, true);
+}
+
+bool ProvisioningManager::saveLedConfig(const LedBehaviorConfig& config, char* message, size_t messageLen) {
+  if (message && messageLen > 0) {
+    message[0] = '\0';
+  }
+
+  LedBehaviorConfig normalized = config;
+  normalizeLedBehaviorConfig(&normalized);
+  const LedConfigValidationResult validation = validateLedBehaviorConfig(normalized);
+  if (!validation.ok) {
+    if (message && messageLen > 0) {
+      strlcpy(message, "LED settings rejected.", messageLen);
+    }
+    return false;
+  }
+
+  if (!saveLedBehaviorConfigAtomic(normalized) || !applyLedBehaviorConfig(normalized)) {
+    if (message && messageLen > 0) {
+      strlcpy(message, "LED settings save failed.", messageLen);
+    }
+    return false;
+  }
+
+  if (message && messageLen > 0) {
+    strlcpy(message, "LED settings applied.", messageLen);
+  }
+  return true;
+}
+
+bool ProvisioningManager::resetLedConfig(char* message, size_t messageLen) {
+  LedBehaviorConfig defaults{};
+  setDefaultLedBehaviorConfig(&defaults);
+  normalizeLedBehaviorConfig(&defaults);
+
+  if (!saveLedBehaviorConfigAtomic(defaults) || !applyLedBehaviorConfig(defaults)) {
+    if (message && messageLen > 0) {
+      strlcpy(message, "LED defaults restore failed.", messageLen);
+    }
+    return false;
+  }
+
+  if (message && messageLen > 0) {
+    strlcpy(message, "LED settings restored to defaults.", messageLen);
   }
   return true;
 }

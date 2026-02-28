@@ -1,9 +1,11 @@
 #include "captive_http.h"
 
+#include <ArduinoJson.h>
 #include <ctype.h>
 #include <string.h>
 
 #include "device_identity.h"
+#include "led_config_web.h"
 #include "nvs_config_store.h"
 
 namespace {
@@ -30,6 +32,15 @@ bool isPrintableAscii(const char* value) {
     }
   }
   return true;
+}
+
+bool parseConfirmFlag(const String& payload) {
+  JsonDocument doc;
+  DeserializationError err = deserializeJson(doc, payload);
+  if (err) {
+    return false;
+  }
+  return doc["confirm"].is<bool>() && doc["confirm"].as<bool>();
 }
 }  // namespace
 
@@ -68,6 +79,9 @@ bool CaptiveHttp::begin(uint16_t port, const char* apSsid, const IPAddress& apIp
   server_->on("/", HTTP_GET, [this]() { handleRoot(); });
   server_->on("/health", HTTP_GET, [this]() { handleHealth(); });
   server_->on("/provision", HTTP_POST, [this]() { handleProvision(); });
+  server_->on("/led-config", HTTP_GET, [this]() { handleLedConfigGet(); });
+  server_->on("/led-config", HTTP_POST, [this]() { handleLedConfigPost(); });
+  server_->on("/led-reset", HTTP_POST, [this]() { handleLedReset(); });
   server_->on("/reset", HTTP_POST, [this]() { handleReset(); });
   server_->on("/generate_204", HTTP_ANY, [this]() { handleCaptiveProbe(); });
   server_->on("/hotspot-detect.html", HTTP_ANY, [this]() { handleCaptiveProbe(); });
@@ -113,6 +127,28 @@ void CaptiveHttp::setDraftConfig(const DeviceConfig* draftConfig) {
   }
   draftConfig_ = *draftConfig;
   hasDraftConfig_ = true;
+}
+
+bool CaptiveHttp::parseJsonBody(String* outBody, String* errorMessage) const {
+  if (!server_ || !outBody || !errorMessage) {
+    return false;
+  }
+  if (server_->hasHeader("Content-Length")) {
+    const long bodySize = server_->header("Content-Length").toInt();
+    if (bodySize < 0 || bodySize > static_cast<long>(LED_CONFIG_HTTP_MAX_BODY_BYTES)) {
+      *errorMessage = F("Request body too large.");
+      return false;
+    }
+  }
+
+  const String body = server_->arg("plain");
+  if (body.length() == 0 || body.length() > LED_CONFIG_HTTP_MAX_BODY_BYTES) {
+    *errorMessage = F("Request body too large.");
+    return false;
+  }
+
+  *outBody = body;
+  return true;
 }
 
 bool CaptiveHttp::allowRequest() {
@@ -415,7 +451,13 @@ void CaptiveHttp::sendSecurityHeaders() {
   server_->sendHeader("X-Frame-Options", "DENY");
   server_->sendHeader("Referrer-Policy", "no-referrer");
   server_->sendHeader("Content-Security-Policy",
-                      "default-src 'self'; style-src 'unsafe-inline' 'self'; form-action 'self'; base-uri 'none'");
+                      "default-src 'self'; style-src 'unsafe-inline' 'self'; script-src 'unsafe-inline' 'self'; "
+                      "connect-src 'self'; form-action 'self'; base-uri 'none'");
+}
+
+void CaptiveHttp::sendJson(int code, const String& body) {
+  sendSecurityHeaders();
+  server_->send(code, "application/json", body);
 }
 
 void CaptiveHttp::sendPortalPage(const String& message, bool isError) {
@@ -431,7 +473,7 @@ void CaptiveHttp::sendPortalPage(const String& message, bool isError) {
   const String uiTitle = getUiTitle();
 
   String body;
-  body.reserve(4600);
+  body.reserve(17000);
   body += F("<!doctype html><html><head><meta charset='utf-8'><meta name='viewport' content='width=device-width,initial-scale=1'><title>");
   body += uiTitle;
   body += F(" Setup</title>");
@@ -481,6 +523,8 @@ void CaptiveHttp::sendPortalPage(const String& message, bool isError) {
   body += draftConfig_.tlsInsecure ? F("<option value='0'>Validate certificate</option><option value='1' selected>Insecure (LAN only)</option>")
                                    : F("<option value='0' selected>Validate certificate</option><option value='1'>Insecure (LAN only)</option>");
   body += F("</select><button type='submit'>Save And Reboot</button></form></div>");
+  appendLedConfigEditorSection(&body, "/led-config", "/led-config", "/led-reset", nullptr, "Setup SSID", apSsid_,
+                               "Setup URL", kPortalUrl);
   body += F("<div class='card'><h2>Reset Config</h2><p>Erase provisioned settings and stay in setup mode.</p>");
   body += F("<form method='POST' action='/reset' autocomplete='off'><input type='hidden' name='confirm_token' value='");
   body += resetToken_;
@@ -589,6 +633,132 @@ void CaptiveHttp::handleProvision() {
 
   sendResultPage(200, F("Configuration Saved"),
                  message[0] != '\0' ? String(message) : String(F("Saved. Rebooting now.")));
+}
+
+void CaptiveHttp::handleLedConfigGet() {
+  if (!allowRequest()) {
+    sendTooManyRequests();
+    return;
+  }
+  if (!handler_) {
+    sendJson(500, buildLedConfigActionResponse(false, "backend_unavailable", "LED settings backend unavailable.", false,
+                                               LedPrinterState::UNKNOWN));
+    return;
+  }
+
+  LedBehaviorConfig config{};
+  if (!handler_->loadActiveLedConfig(&config)) {
+    sendJson(500, buildLedConfigActionResponse(false, "load_failed", "Unable to load LED settings.", false,
+                                               LedPrinterState::UNKNOWN));
+    return;
+  }
+  sendJson(200, buildLedConfigApiJson(config));
+}
+
+void CaptiveHttp::handleLedConfigPost() {
+  if (!allowRequest()) {
+    sendTooManyRequests();
+    return;
+  }
+  if (!handler_) {
+    sendJson(500, buildLedConfigActionResponse(false, "backend_unavailable", "LED settings backend unavailable.", false,
+                                               LedPrinterState::UNKNOWN));
+    return;
+  }
+
+  String payload;
+  String errorMessage;
+  if (!parseJsonBody(&payload, &errorMessage)) {
+    sendJson(413, buildLedConfigActionResponse(false, "payload_too_large",
+                                               errorMessage.length() > 0 ? errorMessage.c_str() : "Request body too large.",
+                                               false, LedPrinterState::UNKNOWN));
+    return;
+  }
+
+  LedBehaviorConfig config{};
+  LedConfigJsonParseResult parseResult{};
+  if (!parseLedConfigJsonPayload(payload, &config, &parseResult, &errorMessage)) {
+    sendJson(400, buildLedConfigActionResponse(false, parseResult.code,
+                                               errorMessage.length() > 0 ? errorMessage.c_str() : "LED settings rejected.",
+                                               parseResult.hasState, parseResult.state));
+    return;
+  }
+
+  char message[96];
+  memset(message, 0, sizeof(message));
+  if (!handler_->saveLedConfig(config, message, sizeof(message))) {
+    sendJson(500, buildLedConfigActionResponse(false, "save_failed",
+                                               message[0] != '\0' ? message : "Unable to save LED settings.", false,
+                                               LedPrinterState::UNKNOWN));
+    return;
+  }
+
+  LedBehaviorConfig activeConfig{};
+  if (!handler_->loadActiveLedConfig(&activeConfig)) {
+    activeConfig = config;
+  }
+  String response = buildLedConfigActionResponse(true, "saved",
+                                                 message[0] != '\0' ? message : "LED settings applied.", false,
+                                                 LedPrinterState::UNKNOWN);
+  if (response.endsWith("}")) {
+    response.remove(response.length() - 1);
+    response += F(",\"config\":");
+    response += buildLedConfigApiJson(activeConfig);
+    response += '}';
+  }
+  sendJson(200, response);
+}
+
+void CaptiveHttp::handleLedReset() {
+  if (!allowRequest()) {
+    sendTooManyRequests();
+    return;
+  }
+  if (!handler_) {
+    sendJson(500, buildLedConfigActionResponse(false, "backend_unavailable", "LED settings backend unavailable.", false,
+                                               LedPrinterState::UNKNOWN));
+    return;
+  }
+
+  String payload;
+  String errorMessage;
+  if (!parseJsonBody(&payload, &errorMessage)) {
+    sendJson(413, buildLedConfigActionResponse(false, "payload_too_large",
+                                               errorMessage.length() > 0 ? errorMessage.c_str() : "Request body too large.",
+                                               false, LedPrinterState::UNKNOWN));
+    return;
+  }
+  if (!parseConfirmFlag(payload)) {
+    sendJson(400, buildLedConfigActionResponse(false, "confirm_required",
+                                               "Reset confirmation required for LED settings.", false,
+                                               LedPrinterState::UNKNOWN));
+    return;
+  }
+
+  char message[96];
+  memset(message, 0, sizeof(message));
+  if (!handler_->resetLedConfig(message, sizeof(message))) {
+    sendJson(500, buildLedConfigActionResponse(false, "reset_failed",
+                                               message[0] != '\0' ? message : "Unable to reset LED settings.", false,
+                                               LedPrinterState::UNKNOWN));
+    return;
+  }
+
+  LedBehaviorConfig activeConfig{};
+  if (!handler_->loadActiveLedConfig(&activeConfig)) {
+    setDefaultLedBehaviorConfig(&activeConfig);
+    normalizeLedBehaviorConfig(&activeConfig);
+  }
+  String response = buildLedConfigActionResponse(true, "reset",
+                                                 message[0] != '\0' ? message : "LED settings restored to defaults.",
+                                                 false, LedPrinterState::UNKNOWN);
+  if (response.endsWith("}")) {
+    response.remove(response.length() - 1);
+    response += F(",\"config\":");
+    response += buildLedConfigApiJson(activeConfig);
+    response += '}';
+  }
+  sendJson(200, response);
 }
 
 void CaptiveHttp::handleReset() {

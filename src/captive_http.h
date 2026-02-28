@@ -5,12 +5,16 @@
 
 #include "RuntimeConfig.h"
 #include "config.h"
+#include "led_behavior_config.h"
 
 class CaptiveHttpHandler {
  public:
   virtual ~CaptiveHttpHandler() = default;
   virtual bool applySubmittedConfig(const DeviceConfig& config, char* message, size_t messageLen) = 0;
   virtual bool resetProvisioningConfig(char* message, size_t messageLen) = 0;
+  virtual bool loadActiveLedConfig(LedBehaviorConfig* outConfig) const = 0;
+  virtual bool saveLedConfig(const LedBehaviorConfig& config, char* message, size_t messageLen) = 0;
+  virtual bool resetLedConfig(char* message, size_t messageLen) = 0;
 };
 
 class CaptiveHttp {
@@ -34,6 +38,7 @@ class CaptiveHttp {
 
   bool allowRequest();
   bool parseConfigFromRequest(DeviceConfig* outConfig, String* errorMessage);
+  bool parseJsonBody(String* outBody, String* errorMessage) const;
   bool isAllowedField(const String& name) const;
   bool hasDisallowedControlChars(const String& value) const;
   bool isValidHostValue(const char* host) const;
@@ -45,6 +50,7 @@ class CaptiveHttp {
   void sendSecurityHeaders();
   void sendPortalPage(const String& message, bool isError);
   void sendResultPage(int code, const String& title, const String& message);
+  void sendJson(int code, const String& body);
   void sendHealth();
   void sendRedirect();
   void sendTooManyRequests();
@@ -53,6 +59,9 @@ class CaptiveHttp {
   void handleHealth();
   void handleProvision();
   void handleReset();
+  void handleLedConfigGet();
+  void handleLedConfigPost();
+  void handleLedReset();
   void handleCaptiveProbe();
   void handleNotFound();
 

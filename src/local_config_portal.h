@@ -5,12 +5,16 @@
 
 #include "RuntimeConfig.h"
 #include "config.h"
+#include "led_behavior_config.h"
 
 class LocalConfigPortalHandler {
  public:
   virtual ~LocalConfigPortalHandler() = default;
   virtual const DeviceConfig* activeConfig() const = 0;
+  virtual bool loadActiveLedConfig(LedBehaviorConfig* outConfig) const = 0;
   virtual bool saveRuntimeConfig(const DeviceConfig& config, char* message, size_t messageLen) = 0;
+  virtual bool saveLedConfig(const LedBehaviorConfig& config, char* message, size_t messageLen) = 0;
+  virtual bool resetLedConfig(char* message, size_t messageLen) = 0;
   virtual bool requestRuntimeReboot(char* message, size_t messageLen) = 0;
   virtual bool requestFactoryResetAndReboot(char* message, size_t messageLen) = 0;
 };
@@ -36,6 +40,8 @@ class LocalConfigPortal {
   bool allowRequest();
   bool ensureAuthenticated();
   bool validateCsrf() const;
+  bool validateJsonCsrf(const String& body, String* errorMessage) const;
+  bool parseJsonBody(String* outBody, String* errorMessage) const;
   bool parseConfigUpdate(const DeviceConfig& currentConfig, DeviceConfig* outConfig, String* errorMessage) const;
   bool isAllowedConfigField(const String& name) const;
   bool hasDisallowedControlChars(const String& value) const;
@@ -51,12 +57,16 @@ class LocalConfigPortal {
   void sendLandingPage(const String& message, bool isError);
   void sendConfigPage(const String& message, bool isError);
   void sendResultPage(int code, const String& title, const String& message);
+  void sendJson(int code, const String& body);
   void sendHealth();
   void sendTooManyRequests();
 
   void handleRoot();
   void handleConfigGet();
   void handleConfigPost();
+  void handleLedConfigGet();
+  void handleLedConfigPost();
+  void handleLedReset();
   void handleReboot();
   void handleReset();
   void handleHealth();

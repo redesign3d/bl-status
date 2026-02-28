@@ -40,6 +40,9 @@ class ProvisioningManager : public CaptiveHttpHandler, public ImprovSerialHandle
 
   bool applySubmittedConfig(const DeviceConfig& config, char* message, size_t messageLen) override;
   bool resetProvisioningConfig(char* message, size_t messageLen) override;
+  bool loadActiveLedConfig(LedBehaviorConfig* outConfig) const override;
+  bool saveLedConfig(const LedBehaviorConfig& config, char* message, size_t messageLen) override;
+  bool resetLedConfig(char* message, size_t messageLen) override;
   bool handleImprovWifiSettings(const char* ssid, const char* password, char* url, size_t urlLen, char* message,
                                 size_t messageLen) override;
   bool saveRuntimeConfig(const DeviceConfig& config, char* message, size_t messageLen) override;
