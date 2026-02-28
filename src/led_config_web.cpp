@@ -301,7 +301,9 @@ void setParseError(LedConfigJsonParseResult* result, const char* code, String* e
 }
 
 bool isAllowedRootKey(const char* key) {
-  return key && (!strcmp(key, "maxBrightness") || !strcmp(key, "states") || !strcmp(key, "csrf"));
+  return key && (!strcmp(key, "maxBrightness") || !strcmp(key, "states") || !strcmp(key, "csrf") ||
+                 !strcmp(key, "version") || !strcmp(key, "modeOrder") || !strcmp(key, "modeLabels") ||
+                 !strcmp(key, "stateOrder") || !strcmp(key, "stateLabels"));
 }
 
 bool isAllowedStyleKey(const char* key) {
@@ -396,6 +398,55 @@ bool parseStateStyle(JsonObjectConst object, LedPrinterState state, LedStateStyl
   outStyle->flashDutyPct = static_cast<uint8_t>(component);
   return true;
 }
+
+bool ledConfigsEqual(const LedBehaviorConfig& a, const LedBehaviorConfig& b) {
+  if (a.maxBrightness != b.maxBrightness) {
+    return false;
+  }
+  for (size_t i = 0; i < LED_PRINTER_STATE_COUNT; ++i) {
+    const LedStateStyle& lhs = a.states[i];
+    const LedStateStyle& rhs = b.states[i];
+    if (lhs.mode != rhs.mode || lhs.color.r != rhs.color.r || lhs.color.g != rhs.color.g || lhs.color.b != rhs.color.b ||
+        lhs.baselineBrightness != rhs.baselineBrightness || lhs.speedMs != rhs.speedMs ||
+        lhs.flashDutyPct != rhs.flashDutyPct) {
+      return false;
+    }
+  }
+  return true;
+}
+
+String buildLedConfigRequestJson(const LedBehaviorConfig& config) {
+  String out;
+  out.reserve(1500);
+  out += F("{\"maxBrightness\":");
+  out += String(config.maxBrightness);
+  out += F(",\"states\":{");
+  for (size_t i = 0; i < LED_PRINTER_STATE_COUNT; ++i) {
+    if (i > 0) {
+      out += ',';
+    }
+    const LedPrinterState state = static_cast<LedPrinterState>(i);
+    const LedStateStyle& style = config.states[i];
+    appendJsonString(&out, ledPrinterStateKey(state));
+    out += F(":{\"mode\":");
+    appendJsonString(&out, ledAnimationModeKey(style.mode));
+    out += F(",\"color\":{\"r\":");
+    out += String(style.color.r);
+    out += F(",\"g\":");
+    out += String(style.color.g);
+    out += F(",\"b\":");
+    out += String(style.color.b);
+    out += F("},\"baselineBrightness\":");
+    out += String(style.baselineBrightness);
+    out += F(",\"speedMs\":");
+    out += String(style.speedMs);
+    out += F(",\"flashDutyPct\":");
+    out += String(style.flashDutyPct);
+    out += F("}");
+  }
+  out += F("}}");
+  return out;
+}
 }  // namespace
 
 bool parseLedConfigJsonPayload(const String& payload, LedBehaviorConfig* outConfig, LedConfigJsonParseResult* result,
@@ -432,6 +483,14 @@ bool parseLedConfigJsonPayload(const String& payload, LedBehaviorConfig* outConf
   for (JsonPairConst kv : root) {
     if (!isAllowedRootKey(kv.key().c_str())) {
       setParseError(result, "unexpected_field", errorMessage, F("Unexpected LED payload field."));
+      return false;
+    }
+  }
+
+  if (!root["version"].isNull()) {
+    uint32_t version = 0;
+    if (!readUintField(root["version"], 1, 255, &version) || version != LED_CONFIG_SCHEMA_VERSION) {
+      setParseError(result, "schema_unsupported", errorMessage, F("Unsupported LED schema version."));
       return false;
     }
   }
@@ -619,4 +678,45 @@ void appendLedConfigEditorSection(String* body, const char* fetchPath, const cha
   *body += htmlEscapeText(locationValue ? locationValue : "");
   *body += F("'><p>Loading LED settings...</p></div></div>");
   *body += FPSTR(kLedUiScript);
+}
+
+bool runLedConfigJsonSelfTest(Stream& out) {
+  LedBehaviorConfig config{};
+  LedBehaviorConfig parsed{};
+  setDefaultLedBehaviorConfig(&config);
+  normalizeLedBehaviorConfig(&config);
+
+  LedConfigJsonParseResult result{};
+  String errorMessage;
+  if (!parseLedConfigJsonPayload(buildLedConfigRequestJson(config), &parsed, &result, &errorMessage)) {
+    out.println("Self-test failed: expected LED JSON payload to parse");
+    return false;
+  }
+  if (!ledConfigsEqual(config, parsed)) {
+    out.println("Self-test failed: LED JSON round-trip mismatch");
+    return false;
+  }
+
+  const String missingStatePayload =
+      F("{\"maxBrightness\":100,\"states\":{\"unknown\":{\"mode\":\"SOLID\",\"color\":{\"r\":1,\"g\":2,\"b\":3},"
+        "\"baselineBrightness\":1,\"speedMs\":1000,\"flashDutyPct\":50}}}");
+  errorMessage.remove(0);
+  if (parseLedConfigJsonPayload(missingStatePayload, &parsed, &result, &errorMessage) || strcmp(result.code, "missing_state") != 0) {
+    out.println("Self-test failed: expected missing_state rejection");
+    return false;
+  }
+
+  const String extraStatePayload =
+      F("{\"maxBrightness\":100,\"states\":{\"unknown\":{\"mode\":\"SOLID\",\"color\":{\"r\":1,\"g\":2,\"b\":3},"
+        "\"baselineBrightness\":1,\"speedMs\":1000,\"flashDutyPct\":50},\"invalid\":{\"mode\":\"SOLID\","
+        "\"color\":{\"r\":1,\"g\":2,\"b\":3},\"baselineBrightness\":1,\"speedMs\":1000,\"flashDutyPct\":50}}}");
+  errorMessage.remove(0);
+  if (parseLedConfigJsonPayload(extraStatePayload, &parsed, &result, &errorMessage) || strcmp(result.code, "unknown_state") != 0) {
+    out.println("Self-test failed: expected unknown_state rejection");
+    return false;
+  }
+
+  clearLedBehaviorConfig(&config);
+  clearLedBehaviorConfig(&parsed);
+  return true;
 }

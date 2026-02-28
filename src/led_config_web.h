@@ -19,3 +19,4 @@ String buildLedConfigActionResponse(bool ok, const char* code, const char* messa
 void appendLedConfigEditorSection(String* body, const char* fetchPath, const char* savePath, const char* resetPath,
                                   const char* csrfToken, const char* networkLabel, const char* networkValue,
                                   const char* locationLabel, const char* locationValue);
+bool runLedConfigJsonSelfTest(Stream& out);

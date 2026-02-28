@@ -15,6 +15,7 @@ ESP32-based status display for a Bambu printer. Runtime configuration is stored 
   - otherwise it uses the trailing 6 characters of the configured `accessCode`
 - If the printer `accessCode` is changed in the local portal, the LAN portal login changes with it after the save+reboot.
 - If the hostname does not resolve on your network, use the device IP shown on the local portal landing page or in your router DHCP table.
+- The local `/config` page also includes LED settings and applies LED changes immediately after atomic save.
 
 ## Provisioning Modes
 
@@ -32,6 +33,10 @@ ESP32-based status display for a Bambu printer. Runtime configuration is stored 
   - `accessCode`
   - `tlsInsecure`
 - On success the device stores the config atomically in NVS, shuts down provisioning services, and reboots into normal operation.
+- The same setup page includes LED settings:
+  - global max brightness
+  - per-state color, animation mode, baseline brightness, period, and flash duty
+  - copy-from helpers and reset-to-defaults without wiping Wi-Fi credentials
 
 Notes:
 - The setup AP is intentionally open for maximum compatibility on screenless devices.
@@ -50,6 +55,36 @@ Notes:
 - If the firmware already has the non-Wi-Fi printer fields in its draft config, a successful Improv Wi-Fi exchange can complete provisioning immediately.
 - If printer settings are still missing, the device connects to Wi-Fi, returns a local URL, and keeps the HTTP setup portal available there so onboarding can finish over the LAN.
 - Once Wi-Fi is connected, the preferred follow-up URL is `http://bl-status-XXXX.local/`.
+
+## LED Behavior Settings
+
+- LED behavior is stored separately in NVS namespace `led` with its own schema version and atomic save/verify path.
+- Configurable printer states are derived from the current runtime status mapping:
+  - `Unknown`
+  - `Idle`
+  - `Prepare`
+  - `Printing`
+  - `Paused`
+  - `Finished`
+  - `Error`
+- Available animation modes:
+  - `Solid`
+  - `Flashing`
+  - `Sine`
+  - `Breathing`
+- Parameters:
+  - `Max Brightness`: global cap applied to every LED effect
+  - `Baseline Brightness`: minimum floor before the global cap is applied
+  - `Period (ms)`: full animation period
+  - `Flash Duty %`: on-time ratio for flashing states
+  - `Color`: RGB output color for the state
+- Validation rules:
+  - max brightness `1..255`
+  - baseline brightness `0..255`, clamped to max brightness
+  - flash period `50..10000 ms`
+  - sine/breathe period `200..20000 ms`
+  - flash duty `1..99`
+- Saving LED settings does not reboot the device; the active LED renderer reloads the new config immediately.
 
 ## OLED UX
 - When an OLED is present, provisioning mode shows:

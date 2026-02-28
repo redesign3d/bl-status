@@ -29,11 +29,22 @@
 
 ## Storage
 - Runtime config is stored only in NVS namespace `cfg`.
+- LED behavior config is stored in NVS namespace `led` with its own schema version.
 - Config writes are atomic:
   1. write all fields with `provisioned=0`
   2. commit and re-open for verification
   3. mark `provisioned=1` only after the verified readback passes validation
 - Factory reset clears only provisioning-related keys in `cfg`.
+- LED settings use the same pattern: write full config, commit, read back, validate again, then apply to the active renderer.
+
+## LED Settings
+- LED settings are not secrets, but they are still validated strictly and saved atomically to avoid broken runtime states.
+- Both the setup portal and the authenticated LAN portal expose the same LED settings API and mobile-friendly editor.
+- Accepted printer states match the firmware's current status mapping: `Unknown`, `Idle`, `Prepare`, `Printing`, `Paused`, `Finished`, and `Error`.
+- Accepted animation modes are `Solid`, `Flashing`, `Sine`, and `Breathing`.
+- State-changing LED API routes inherit the existing portal protections:
+  - setup portal: body limits, no-store headers, rate limiting
+  - local portal: Basic Auth, CSRF, body limits, rate limiting
 
 ## Improv Serial
 - The device implements Improv Wi-Fi over serial for Wi-Fi onboarding and installer integration.

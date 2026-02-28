@@ -7,6 +7,8 @@
 #include <nvs_flash.h>
 #include <string.h>
 
+#include "led_config_web.h"
+
 namespace {
 constexpr const char* kNamespace = "cfg";
 constexpr const char* kKeySchemaVersion = "cv";
@@ -642,6 +644,9 @@ bool runValidationSelfTest(Stream& out) {
   }
 
   if (!runLedConfigValidationSelfTest(out)) {
+    ok = false;
+  }
+  if (!runLedConfigJsonSelfTest(out)) {
     ok = false;
   }
 
