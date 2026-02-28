@@ -9,8 +9,11 @@ ESP32-based status display for a Bambu printer. Runtime configuration is stored 
 - The local portal is only active while STA Wi-Fi is connected and the device has a valid local IP.
 - The portal requires HTTP Basic Auth:
   - username: `admin`
-  - password: generated once on first successful provisioning and stored in NVS
-- The initial admin password is shown once on serial during provisioning success and on the OLED if present. It is not shown again unless the device is factory reset and reprovisioned.
+  - password: derived from the configured printer access code
+- The password uses the access-code suffix:
+  - if the configured `accessCode` contains at least 6 digits, it uses the last 6 digits
+  - otherwise it uses the trailing 6 characters of the configured `accessCode`
+- If the printer `accessCode` is changed in the local portal, the LAN portal login changes with it after the save+reboot.
 - If the hostname does not resolve on your network, use the device IP shown on the local portal landing page or in your router DHCP table.
 
 ## Provisioning Modes
@@ -53,14 +56,13 @@ Notes:
   - setup SSID
   - setup IP
   - on-device QR code for `http://192.168.4.1/`
-- When the local admin password is generated, the OLED shows it once before reboot so the LAN portal can be accessed later.
 - The device remains fully provisionable without a screen.
 
 ## Reset / Re-provision
 - Provisioning automatically starts when no valid config is found.
 - Repeated Wi-Fi failures in normal operation force a return to provisioning without wiping secrets automatically.
 - The setup portal also exposes a reset action that clears only provisioned config keys after explicit `ERASE` confirmation.
-- The local portal exposes a factory reset action as well. If the admin password is forgotten, use the existing reset path/button and reprovision the device.
+- The local portal exposes a factory reset action as well. If the portal login is unknown, use the printer access code suffix or factory reset and reprovision.
 
 ## Troubleshooting
 - Captive portal did not open: connect to the setup AP and open [http://192.168.4.1/](http://192.168.4.1/) manually.

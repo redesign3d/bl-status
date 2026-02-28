@@ -186,22 +186,3 @@ void drawProvisioningScreen(const char* apSsid, const IPAddress& apIp) {
 
   display.display();
 }
-
-void drawAdminPasswordScreen(const char* username, const char* password) {
-  display.clearDisplay();
-  display.setTextWrap(false);
-  display.setTextSize(1);
-  display.setCursor(0, 0);
-  display.println(getUiTitle());
-
-  display.setCursor(0, 14);
-  display.println("Local Portal Login");
-  display.setCursor(0, 26);
-  display.print("User: ");
-  display.println((username && username[0] != '\0') ? username : DEFAULT_ADMIN_USERNAME);
-  display.setCursor(0, 38);
-  display.println("Password:");
-  printWrappedValue((password && password[0] != '\0') ? password : "Unavailable", 0, 48, 21, 0);
-
-  display.display();
-}

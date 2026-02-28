@@ -5,7 +5,6 @@
 #include <string.h>
 
 #include "LogRedaction.h"
-#include "admin_auth_store.h"
 #include "device_identity.h"
 #include "nvs_config_store.h"
 
@@ -21,7 +20,6 @@ ProvisioningManager::ProvisioningManager()
       provisioningDeadlineMs_(0),
       rebootAtMs_(0),
       nextProvisionRetryMs_(0),
-      adminAnnouncementUntilMs_(0),
       lastWifiFailureCheckMs_(0),
       wifiFailureCount_(0),
       wifiFailureThreshold_(WIFI_FAILURE_THRESHOLD_BASE) {
@@ -29,8 +27,6 @@ ProvisioningManager::ProvisioningManager()
   clearDeviceConfig(&draftConfig_);
   memset(apSsid_, 0, sizeof(apSsid_));
   memset(resetToken_, 0, sizeof(resetToken_));
-  memset(pendingAdminUser_, 0, sizeof(pendingAdminUser_));
-  memset(pendingAdminPass_, 0, sizeof(pendingAdminPass_));
 }
 
 void ProvisioningManager::begin() {
@@ -46,12 +42,6 @@ void ProvisioningManager::begin() {
   }
 
   if (loadConfigFromNvs()) {
-    AdminCredentials credentials{};
-    bool generated = false;
-    if (ensureLocalAdminCredentials(&credentials, &generated) && generated) {
-      announceGeneratedAdminCredentials(credentials, "Generated for existing provisioned device");
-    }
-    clearAdminCredentialsStruct(&credentials);
     state_ = ProvisioningState::NORMAL_OPERATION;
     Serial.println("Provisioned config loaded from NVS");
     return;
@@ -62,10 +52,6 @@ void ProvisioningManager::begin() {
 }
 
 void ProvisioningManager::loop(uint32_t nowMs) {
-  if (adminAnnouncementUntilMs_ != 0 && nowMs >= adminAnnouncementUntilMs_) {
-    clearPendingAdminCredentials();
-  }
-
   if (state_ == ProvisioningState::NORMAL_OPERATION) {
     localPortal_.loop(nowMs);
   }
@@ -132,18 +118,6 @@ const char* ProvisioningManager::provisioningSsid() const { return apSsid_; }
 
 IPAddress ProvisioningManager::provisioningIp() const { return apIp_; }
 
-bool ProvisioningManager::shouldShowAdminPassword(uint32_t nowMs) const {
-  return pendingAdminPass_[0] != '\0' && adminAnnouncementUntilMs_ != 0 && nowMs < adminAnnouncementUntilMs_;
-}
-
-const char* ProvisioningManager::adminUsernameForDisplay() const {
-  return pendingAdminUser_[0] != '\0' ? pendingAdminUser_ : nullptr;
-}
-
-const char* ProvisioningManager::adminPasswordForDisplay() const {
-  return pendingAdminPass_[0] != '\0' ? pendingAdminPass_ : nullptr;
-}
-
 void ProvisioningManager::notifyConnectivity(bool wifiConnected, uint32_t nowMs) {
   if (state_ != ProvisioningState::NORMAL_OPERATION) {
     stopRuntimeServices();
@@ -180,7 +154,6 @@ void ProvisioningManager::notifyConnectivity(bool wifiConnected, uint32_t nowMs)
 void ProvisioningManager::requestFactoryReset() {
   char message[96];
   resetProvisioningConfig(message, sizeof(message));
-  clearPendingAdminCredentials();
   stopRuntimeServices();
   stopProvisioning();
   state_ = ProvisioningState::ENTER_PROVISIONING;
@@ -192,20 +165,7 @@ bool ProvisioningManager::applySubmittedConfig(const DeviceConfig& config, char*
     message[0] = '\0';
   }
 
-  AdminCredentials credentials{};
-  bool generated = false;
-  if (!ensureLocalAdminCredentials(&credentials, &generated)) {
-    if (message && messageLen > 0) {
-      strlcpy(message, "Admin credential initialization failed.", messageLen);
-    }
-    return false;
-  }
-
   if (!saveProvisionedConfig(config)) {
-    if (generated) {
-      clearAdminCredentials();
-    }
-    clearAdminCredentialsStruct(&credentials);
     if (message && messageLen > 0) {
       strlcpy(message, "Configuration save failed.", messageLen);
     }
@@ -213,20 +173,12 @@ bool ProvisioningManager::applySubmittedConfig(const DeviceConfig& config, char*
   }
 
   if (!loadConfigFromNvs()) {
-    if (generated) {
-      clearAdminCredentials();
-    }
-    clearAdminCredentialsStruct(&credentials);
     if (message && messageLen > 0) {
       strlcpy(message, "Configuration verify failed.", messageLen);
     }
     return false;
   }
 
-  if (generated) {
-    announceGeneratedAdminCredentials(credentials, "Generated during provisioning");
-  }
-  clearAdminCredentialsStruct(&credentials);
   provisioningCompletePending_ = true;
   if (message && messageLen > 0) {
     strlcpy(message, "Saved. Rebooting now.", messageLen);
@@ -245,11 +197,9 @@ bool ProvisioningManager::resetProvisioningConfig(char* message, size_t messageL
     }
     return false;
   }
-  clearAdminCredentials();
 
   clearDeviceConfig(&activeConfig_);
   clearDeviceConfig(&draftConfig_);
-  clearPendingAdminCredentials();
   hasActiveConfig_ = false;
   refreshDraftInPortal();
   if (message && messageLen > 0) {
@@ -338,30 +288,13 @@ bool ProvisioningManager::saveRuntimeConfig(const DeviceConfig& config, char* me
     message[0] = '\0';
   }
 
-  AdminCredentials credentials{};
-  bool generated = false;
-  if (!ensureLocalAdminCredentials(&credentials, &generated)) {
-    if (message && messageLen > 0) {
-      strlcpy(message, "Admin credential initialization failed.", messageLen);
-    }
-    return false;
-  }
-
   if (!saveProvisionedConfig(config) || !loadConfigFromNvs()) {
-    if (generated) {
-      clearAdminCredentials();
-    }
-    clearAdminCredentialsStruct(&credentials);
     if (message && messageLen > 0) {
       strlcpy(message, "Configuration save failed.", messageLen);
     }
     return false;
   }
 
-  if (generated) {
-    announceGeneratedAdminCredentials(credentials, "Generated during LAN portal save");
-  }
-  clearAdminCredentialsStruct(&credentials);
   scheduleReboot(millis());
   if (message && messageLen > 0) {
     strlcpy(message, "Saved. Rebooting now.", messageLen);
@@ -378,14 +311,13 @@ bool ProvisioningManager::requestRuntimeReboot(char* message, size_t messageLen)
 }
 
 bool ProvisioningManager::requestFactoryResetAndReboot(char* message, size_t messageLen) {
-  if (!clearProvisionedConfig() || !clearAdminCredentials()) {
+  if (!clearProvisionedConfig()) {
     if (message && messageLen > 0) {
       strlcpy(message, "Factory reset failed.", messageLen);
     }
     return false;
   }
 
-  clearPendingAdminCredentials();
   scheduleReboot(millis());
   if (message && messageLen > 0) {
     strlcpy(message, "Configuration cleared. Rebooting into setup mode.", messageLen);
@@ -466,11 +398,7 @@ void ProvisioningManager::stopProvisioning() {
 
 void ProvisioningManager::scheduleReboot(uint32_t nowMs) {
   state_ = ProvisioningState::REBOOT_PENDING;
-  const uint32_t defaultRebootAt = nowMs + PROVISIONING_REBOOT_DELAY_MS;
-  rebootAtMs_ = defaultRebootAt;
-  if (adminAnnouncementUntilMs_ > rebootAtMs_) {
-    rebootAtMs_ = adminAnnouncementUntilMs_;
-  }
+  rebootAtMs_ = nowMs + PROVISIONING_REBOOT_DELAY_MS;
 }
 
 void ProvisioningManager::buildProvisioningSsid() {
@@ -502,36 +430,6 @@ bool ProvisioningManager::isPrintableAscii(const char* value) const {
 }
 
 void ProvisioningManager::refreshDraftInPortal() { http_.setDraftConfig(&draftConfig_); }
-
-bool ProvisioningManager::ensureLocalAdminCredentials(AdminCredentials* credentials, bool* generated) {
-  return ensureAdminCredentials(credentials, generated);
-}
-
-void ProvisioningManager::setPendingAdminCredentials(const AdminCredentials& credentials, uint32_t nowMs) {
-  strlcpy(pendingAdminUser_, credentials.username, sizeof(pendingAdminUser_));
-  strlcpy(pendingAdminPass_, credentials.password, sizeof(pendingAdminPass_));
-  adminAnnouncementUntilMs_ = nowMs + ADMIN_PASSWORD_ANNOUNCE_MS;
-}
-
-void ProvisioningManager::clearPendingAdminCredentials() {
-  memset(pendingAdminUser_, 0, sizeof(pendingAdminUser_));
-  memset(pendingAdminPass_, 0, sizeof(pendingAdminPass_));
-  adminAnnouncementUntilMs_ = 0;
-}
-
-void ProvisioningManager::announceGeneratedAdminCredentials(const AdminCredentials& credentials, const char* reason) {
-  setPendingAdminCredentials(credentials, millis());
-  Serial.println();
-  Serial.println("=== Local Portal Credentials ===");
-  if (reason && reason[0] != '\0') {
-    Serial.println(reason);
-  }
-  Serial.printf("URL: http://%s.local/\n", getHostname().c_str());
-  Serial.printf("Admin user: %s\n", credentials.username);
-  Serial.printf("Admin password: %s\n", credentials.password);
-  Serial.println("===============================");
-  Serial.println();
-}
 
 void ProvisioningManager::updateRuntimeServices(bool wifiConnected) {
   if (!wifiConnected || !hasActiveConfig_ || WiFi.status() != WL_CONNECTED || WiFi.localIP()[0] == 0) {

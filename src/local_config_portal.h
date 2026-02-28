@@ -42,10 +42,10 @@ class LocalConfigPortal {
   bool containsOnlyTokenChars(const char* value) const;
   bool isValidHostValue(const char* host) const;
   bool parseBooleanArg(const String& value, bool* outValue) const;
+  bool deriveAuthPassword(const DeviceConfig& config, char* password, size_t passwordLen) const;
   void appendInvalidField(String* errorMessage, bool* firstField, const __FlashStringHelper* fieldLabel) const;
   String htmlEscape(const char* value) const;
   void generateCsrfToken();
-  bool reloadCredentials();
 
   void sendSecurityHeaders();
   void sendLandingPage(const String& message, bool isError);
@@ -57,7 +57,6 @@ class LocalConfigPortal {
   void handleRoot();
   void handleConfigGet();
   void handleConfigPost();
-  void handleAdminPasswordPost();
   void handleReboot();
   void handleReset();
   void handleHealth();
@@ -67,8 +66,8 @@ class LocalConfigPortal {
   LocalConfigPortalHandler* handler_;
   bool running_;
   uint32_t nowMs_;
-  char adminUser_[ADMIN_USERNAME_MAX_LEN + 1];
-  char adminPass_[ADMIN_PASSWORD_MAX_LEN + 1];
+  char authUser_[16];
+  char authPass_[LOCAL_PORTAL_PASSWORD_SUFFIX_LEN + 1];
   char csrfToken_[LOCAL_PORTAL_CSRF_TOKEN_LEN + 1];
   RateSlot rateSlots_[PROVISIONING_RATE_LIMIT_SLOTS];
 };

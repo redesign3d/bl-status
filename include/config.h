@@ -18,12 +18,8 @@ constexpr uint16_t MIN_MQTT_PORT = 1;
 constexpr uint16_t MAX_MQTT_PORT = 65535;
 constexpr uint16_t DEFAULT_MQTT_TLS_PORT = 8883;
 constexpr const char* DEFAULT_MQTT_USERNAME = "bblp";
-constexpr const char* DEFAULT_ADMIN_USERNAME = "admin";
-constexpr size_t ADMIN_USERNAME_MAX_LEN = 16;
-constexpr size_t ADMIN_PASSWORD_MIN_LEN = 12;
-constexpr size_t ADMIN_PASSWORD_MAX_LEN = 32;
-constexpr size_t ADMIN_PASSWORD_GENERATED_LEN = 16;
-constexpr uint32_t ADMIN_PASSWORD_ANNOUNCE_MS = 12000UL;
+constexpr const char* LOCAL_PORTAL_USERNAME = "admin";
+constexpr size_t LOCAL_PORTAL_PASSWORD_SUFFIX_LEN = 6;
 
 constexpr bool ENABLE_LED_SYNC = true;  // Increase idle brightness when printer light is on.
 

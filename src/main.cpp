@@ -84,20 +84,6 @@ void loop() {
 
   gProvisioning.loop(now);
 
-  if (gProvisioning.isRebootPending()) {
-    if (gClientStarted) {
-      gClient.stop();
-      gClientStarted = false;
-    }
-
-    if (gDisplayReady && (now - lastDisplayMs >= DISPLAY_INTERVAL_MS) &&
-        gProvisioning.shouldShowAdminPassword(now)) {
-      lastDisplayMs = now;
-      drawAdminPasswordScreen(gProvisioning.adminUsernameForDisplay(), gProvisioning.adminPasswordForDisplay());
-    }
-    return;
-  }
-
   if (gProvisioning.isProvisioningActive()) {
     if (gClientStarted) {
       gClient.stop();
@@ -156,10 +142,6 @@ void loop() {
 
   if (gDisplayReady && (now - lastDisplayMs >= DISPLAY_INTERVAL_MS)) {
     lastDisplayMs = now;
-    if (gProvisioning.shouldShowAdminPassword(now)) {
-      drawAdminPasswordScreen(gProvisioning.adminUsernameForDisplay(), gProvisioning.adminPasswordForDisplay());
-    } else {
-      drawStatus(gStatus);
-    }
+    drawStatus(gStatus);
   }
 }

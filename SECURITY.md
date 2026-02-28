@@ -19,14 +19,16 @@
 - The local portal is disabled whenever provisioning mode is active or STA Wi-Fi is disconnected.
 - The local portal requires HTTP Basic Auth by default:
   - username `admin`
-  - per-device password generated on first successful provisioning and stored in NVS namespace `auth`
-- The generated admin password is shown once on serial and on the OLED if present, then only stored in NVS.
+  - password derived from the configured printer `accessCode`
+- Password derivation:
+  - if `accessCode` contains at least 6 digits, use its last 6 digits
+  - otherwise use its trailing 6 characters
+- This removes the separate LAN-admin secret and ties portal access to the printer credential already required during provisioning.
 - State-changing POST routes require both Basic Auth and a per-process CSRF token.
 - Secret config fields are never rendered back to the browser. Empty secret inputs mean “keep current value”.
 
 ## Storage
 - Runtime config is stored only in NVS namespace `cfg`.
-- Local portal admin credentials are stored only in NVS namespace `auth`.
 - Config writes are atomic:
   1. write all fields with `provisioned=0`
   2. commit and re-open for verification
@@ -41,6 +43,6 @@
 ## Reset / Recovery
 - The setup portal exposes `POST /reset`, but only while provisioning is active and only after explicit `ERASE` confirmation plus a per-session token.
 - The local portal exposes authenticated reset and reboot actions.
-- If the local portal admin password is forgotten, the supported recovery path is factory reset followed by reprovisioning, which generates a new password.
+- If the local portal login is unknown, the supported recovery path is to use the printer access code suffix or factory reset and reprovision.
 - Repeated Wi-Fi failures trigger provisioning fallback without automatically erasing saved config.
 - If NVS initialization fails because of exhausted or mismatched pages, the store attempts erase-and-reinit before giving up.

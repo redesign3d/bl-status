@@ -10,6 +10,8 @@ namespace {
 PrinterClient* g_instance = nullptr;
 constexpr uint32_t WIFI_RETRY_INTERVAL_MS = 5000;
 constexpr uint32_t MQTT_RETRY_INTERVAL_MS = 5000;
+constexpr uint16_t MQTT_SOCKET_TIMEOUT_S = 3;
+constexpr uint32_t TLS_HANDSHAKE_TIMEOUT_MS = 3;
 }
 
 PrinterClient::PrinterClient()
@@ -48,12 +50,13 @@ void PrinterClient::begin(PrinterStatus* sharedStatus, const DeviceConfig* runti
     wifiClient_.setInsecure();
     Serial.println("No printer root CA found; falling back to insecure TLS");
   }
-  wifiClient_.setHandshakeTimeout(15);
+  wifiClient_.setHandshakeTimeout(TLS_HANDSHAKE_TIMEOUT_MS);
   wifiClient_.setNoDelay(true);
 
   mqttClient_.setServer(config_->printerHost, config_->printerPort);
   mqttClient_.setCallback(PrinterClient::handleMqttWrapper);
   mqttClient_.setKeepAlive(30);
+  mqttClient_.setSocketTimeout(MQTT_SOCKET_TIMEOUT_S);
   mqttClient_.setBufferSize(4096);
 }
 
@@ -151,13 +154,14 @@ void PrinterClient::ensureMqtt() {
     return;
   }
 
-  lastMqttAttemptMs_ = now;
   String clientId = String("bambu-status-") + String((uint32_t)(ESP.getEfuseMac() & 0xFFFFFF), HEX);
   if (!mqttClient_.connect(clientId.c_str(), config_->mqttUsername, config_->accessCode)) {
+    lastMqttAttemptMs_ = millis();
     Serial.printf("MQTT connect failed, state=%d\n", mqttClient_.state());
     return;
   }
 
+  lastMqttAttemptMs_ = millis();
   Serial.println("MQTT handshake complete");
   mqttReportedConnected_ = false;  // Force subscription in connected block
 }

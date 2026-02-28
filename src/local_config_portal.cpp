@@ -4,7 +4,6 @@
 #include <esp_random.h>
 #include <string.h>
 
-#include "admin_auth_store.h"
 #include "device_identity.h"
 #include "nvs_config_store.h"
 
@@ -36,8 +35,8 @@ bool isPrintableAscii(const char* value) {
 }  // namespace
 
 LocalConfigPortal::LocalConfigPortal() : server_(nullptr), handler_(nullptr), running_(false), nowMs_(0) {
-  memset(adminUser_, 0, sizeof(adminUser_));
-  memset(adminPass_, 0, sizeof(adminPass_));
+  memset(authUser_, 0, sizeof(authUser_));
+  memset(authPass_, 0, sizeof(authPass_));
   memset(csrfToken_, 0, sizeof(csrfToken_));
   memset(rateSlots_, 0, sizeof(rateSlots_));
 }
@@ -50,7 +49,13 @@ bool LocalConfigPortal::begin(uint16_t port, LocalConfigPortalHandler* handler) 
     return false;
   }
   handler_ = handler;
-  if (!reloadCredentials()) {
+  const DeviceConfig* currentConfig = handler_->activeConfig();
+  if (!currentConfig) {
+    handler_ = nullptr;
+    return false;
+  }
+  strlcpy(authUser_, LOCAL_PORTAL_USERNAME, sizeof(authUser_));
+  if (!deriveAuthPassword(*currentConfig, authPass_, sizeof(authPass_))) {
     handler_ = nullptr;
     return false;
   }
@@ -68,7 +73,6 @@ bool LocalConfigPortal::begin(uint16_t port, LocalConfigPortalHandler* handler) 
   server_->on("/", HTTP_GET, [this]() { handleRoot(); });
   server_->on("/config", HTTP_GET, [this]() { handleConfigGet(); });
   server_->on("/config", HTTP_POST, [this]() { handleConfigPost(); });
-  server_->on("/admin-password", HTTP_POST, [this]() { handleAdminPasswordPost(); });
   server_->on("/reboot", HTTP_POST, [this]() { handleReboot(); });
   server_->on("/reset", HTTP_POST, [this]() { handleReset(); });
   server_->on("/health", HTTP_GET, [this]() { handleHealth(); });
@@ -94,8 +98,8 @@ void LocalConfigPortal::stop() {
   }
   handler_ = nullptr;
   running_ = false;
-  memset(adminUser_, 0, sizeof(adminUser_));
-  memset(adminPass_, 0, sizeof(adminPass_));
+  memset(authUser_, 0, sizeof(authUser_));
+  memset(authPass_, 0, sizeof(authPass_));
   memset(csrfToken_, 0, sizeof(csrfToken_));
 }
 
@@ -148,13 +152,50 @@ bool LocalConfigPortal::ensureAuthenticated() {
   if (!server_) {
     return false;
   }
-  if (server_->authenticate(adminUser_, adminPass_)) {
+  if (server_->authenticate(authUser_, authPass_)) {
     return true;
   }
   const String realm = getUiTitle() + String(" Admin");
   sendSecurityHeaders();
   server_->requestAuthentication(BASIC_AUTH, realm.c_str(), "Authentication required");
   return false;
+}
+
+bool LocalConfigPortal::deriveAuthPassword(const DeviceConfig& config, char* password, size_t passwordLen) const {
+  if (!password || passwordLen == 0) {
+    return false;
+  }
+
+  password[0] = '\0';
+  const size_t accessCodeLen = strlen(config.accessCode);
+  if (accessCodeLen == 0 || accessCodeLen > ACCESS_CODE_MAX_LEN || !containsOnlyTokenChars(config.accessCode)) {
+    return false;
+  }
+
+  char digits[ACCESS_CODE_MAX_LEN + 1];
+  size_t digitCount = 0;
+  memset(digits, 0, sizeof(digits));
+  for (size_t i = 0; i < accessCodeLen && digitCount < ACCESS_CODE_MAX_LEN; ++i) {
+    const unsigned char c = static_cast<unsigned char>(config.accessCode[i]);
+    if (isdigit(c)) {
+      digits[digitCount++] = static_cast<char>(c);
+    }
+  }
+
+  const char* source = config.accessCode;
+  size_t sourceLen = accessCodeLen;
+  if (digitCount >= LOCAL_PORTAL_PASSWORD_SUFFIX_LEN) {
+    source = digits;
+    sourceLen = digitCount;
+  }
+
+  const size_t suffixLen = (sourceLen < LOCAL_PORTAL_PASSWORD_SUFFIX_LEN) ? sourceLen : LOCAL_PORTAL_PASSWORD_SUFFIX_LEN;
+  if (suffixLen == 0 || (suffixLen + 1) > passwordLen) {
+    return false;
+  }
+
+  strlcpy(password, source + (sourceLen - suffixLen), passwordLen);
+  return true;
 }
 
 bool LocalConfigPortal::validateCsrf() const {
@@ -279,17 +320,6 @@ void LocalConfigPortal::generateCsrfToken() {
     csrfToken_[i] = hexNibble(static_cast<uint8_t>(esp_random() & 0x0F));
   }
   csrfToken_[LOCAL_PORTAL_CSRF_TOKEN_LEN] = '\0';
-}
-
-bool LocalConfigPortal::reloadCredentials() {
-  AdminCredentials credentials{};
-  const bool ok = loadAdminCredentials(&credentials);
-  if (ok) {
-    strlcpy(adminUser_, credentials.username, sizeof(adminUser_));
-    strlcpy(adminPass_, credentials.password, sizeof(adminPass_));
-  }
-  clearAdminCredentialsStruct(&credentials);
-  return ok;
 }
 
 bool LocalConfigPortal::parseConfigUpdate(const DeviceConfig& currentConfig, DeviceConfig* outConfig,
@@ -475,7 +505,9 @@ void LocalConfigPortal::sendConfigPage(const String& message, bool isError) {
   body += uiTitle;
   body += F("</h1><p>Reach this device at <code>http://");
   body += getHostname();
-  body += F(".local/</code> while connected to the same network.</p>");
+  body += F(".local/</code> while connected to the same network.</p><p><small>Login uses username <code>");
+  body += LOCAL_PORTAL_USERNAME;
+  body += F("</code> and the derived suffix of the configured printer access code.</small></p>");
   if (message.length() > 0) {
     body += F("<p class='status ");
     body += isError ? F("err") : F("ok");
@@ -507,10 +539,6 @@ void LocalConfigPortal::sendConfigPage(const String& message, bool isError) {
   body += currentConfig->tlsInsecure ? F("<option value='0'>Validate certificate</option><option value='1' selected>Insecure (LAN only)</option>")
                                      : F("<option value='0' selected>Validate certificate</option><option value='1'>Insecure (LAN only)</option>");
   body += F("</select><button type='submit'>Save And Reboot</button></form></div>");
-  body += F("<div class='card'><h2>Admin Password</h2><form method='POST' action='/admin-password' autocomplete='off'>");
-  body += F("<input type='hidden' name='csrf' value='");
-  body += csrfToken_;
-  body += F("'><label for='newAdminPassword'>New Admin Password</label><input id='newAdminPassword' type='password' name='newAdminPassword' maxlength='32' autocomplete='new-password'><label for='confirmAdminPassword'>Confirm Admin Password</label><input id='confirmAdminPassword' type='password' name='confirmAdminPassword' maxlength='32' autocomplete='new-password'><small>Use 12-32 letters, digits, dash, or underscore.</small><button type='submit'>Rotate Admin Password</button></form></div>");
   body += F("<div class='card'><h2>Device Actions</h2><form method='POST' action='/reboot' autocomplete='off'><input type='hidden' name='csrf' value='");
   body += csrfToken_;
   body += F("'><button type='submit'>Reboot Device</button></form><hr><form method='POST' action='/reset' autocomplete='off'><input type='hidden' name='csrf' value='");
@@ -615,41 +643,6 @@ void LocalConfigPortal::handleConfigPost() {
     return;
   }
   sendResultPage(200, F("Configuration Saved"), message[0] != '\0' ? String(message) : String(F("Saved. Rebooting now.")));
-}
-
-void LocalConfigPortal::handleAdminPasswordPost() {
-  if (!allowRequest()) {
-    sendTooManyRequests();
-    return;
-  }
-  if (!ensureAuthenticated()) {
-    return;
-  }
-  if (!validateCsrf()) {
-    sendResultPage(403, F("Request Rejected"), F("Invalid CSRF token."));
-    return;
-  }
-
-  const String newPassword = server_->arg("newAdminPassword");
-  const String confirmPassword = server_->arg("confirmAdminPassword");
-  if (newPassword.length() > ADMIN_PASSWORD_MAX_LEN || confirmPassword.length() > ADMIN_PASSWORD_MAX_LEN ||
-      hasDisallowedControlChars(newPassword) || hasDisallowedControlChars(confirmPassword)) {
-    sendConfigPage(F("Admin password contains invalid characters."), true);
-    return;
-  }
-  if (newPassword != confirmPassword) {
-    sendConfigPage(F("Admin password confirmation did not match."), true);
-    return;
-  }
-  if (!validateAdminPassword(newPassword.c_str())) {
-    sendConfigPage(F("Admin password must be 12-32 letters, digits, dash, or underscore."), true);
-    return;
-  }
-  if (!updateAdminPassword(newPassword.c_str()) || !reloadCredentials()) {
-    sendResultPage(500, F("Password Update Failed"), F("Unable to update admin password."));
-    return;
-  }
-  sendResultPage(200, F("Password Updated"), F("Admin password updated. Re-authentication may be required."));
 }
 
 void LocalConfigPortal::handleReboot() {

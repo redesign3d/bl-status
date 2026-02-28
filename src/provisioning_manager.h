@@ -3,7 +3,6 @@
 #include <Arduino.h>
 
 #include "RuntimeConfig.h"
-#include "admin_auth_store.h"
 #include "captive_dns.h"
 #include "captive_http.h"
 #include "improv_serial.h"
@@ -35,9 +34,6 @@ class ProvisioningManager : public CaptiveHttpHandler, public ImprovSerialHandle
   const DeviceConfig* activeConfig() const;
   const char* provisioningSsid() const;
   IPAddress provisioningIp() const;
-  bool shouldShowAdminPassword(uint32_t nowMs) const;
-  const char* adminUsernameForDisplay() const;
-  const char* adminPasswordForDisplay() const;
 
   void notifyConnectivity(bool wifiConnected, uint32_t nowMs);
   void requestFactoryReset();
@@ -60,10 +56,6 @@ class ProvisioningManager : public CaptiveHttpHandler, public ImprovSerialHandle
   uint8_t randomByte();
   bool isPrintableAscii(const char* value) const;
   void refreshDraftInPortal();
-  bool ensureLocalAdminCredentials(AdminCredentials* credentials, bool* generated);
-  void setPendingAdminCredentials(const AdminCredentials& credentials, uint32_t nowMs);
-  void clearPendingAdminCredentials();
-  void announceGeneratedAdminCredentials(const AdminCredentials& credentials, const char* reason);
   void updateRuntimeServices(bool wifiConnected);
   void stopRuntimeServices();
 
@@ -75,14 +67,11 @@ class ProvisioningManager : public CaptiveHttpHandler, public ImprovSerialHandle
 
   char apSsid_[33];
   char resetToken_[17];
-  char pendingAdminUser_[ADMIN_USERNAME_MAX_LEN + 1];
-  char pendingAdminPass_[ADMIN_PASSWORD_MAX_LEN + 1];
   IPAddress apIp_;
 
   uint32_t provisioningDeadlineMs_;
   uint32_t rebootAtMs_;
   uint32_t nextProvisionRetryMs_;
-  uint32_t adminAnnouncementUntilMs_;
 
   uint32_t lastWifiFailureCheckMs_;
   uint16_t wifiFailureCount_;
