@@ -3,19 +3,18 @@
 #include <ctype.h>
 #include <string.h>
 
+#include "device_identity.h"
 #include "nvs_config_store.h"
 
 namespace {
 constexpr char kPortalPageHead[] PROGMEM =
-    "<!doctype html><html><head><meta charset='utf-8'><meta name='viewport' "
-    "content='width=device-width,initial-scale=1'><title>Bambu Status Setup</title>"
     "<style>body{font-family:Arial,sans-serif;margin:20px auto;max-width:42rem;line-height:1.4;padding:0 12px}"
     "h1,h2{margin-bottom:.4rem}.card{padding:1rem;border:1px solid #ccc;border-radius:.8rem;background:#fafafa;margin:1rem 0}"
     "label{display:block;margin-top:.8rem;font-weight:600}input,select,button{width:100%;padding:.75rem;margin-top:.25rem;font:inherit;box-sizing:border-box}"
     "button{cursor:pointer}.status{padding:.8rem;border-radius:.6rem}.ok{background:#edf7ed;color:#155724}.err{background:#fdecea;color:#721c24}"
     "small{display:block;color:#555;margin-top:.25rem}code{font-family:monospace}</style></head><body>";
 constexpr char kPortalPageIntro[] PROGMEM =
-    "<h1>Bambu Status Setup</h1><p>Connect to the open setup Wi-Fi, then open <code>192.168.4.1</code> if this page did not open automatically.</p>"
+    "<p>Connect to the open setup Wi-Fi, then open <code>192.168.4.1</code> if this page did not open automatically.</p>"
     "<div class='card'><ol><li>Join the setup network.</li><li>Open <code>http://192.168.4.1/</code>.</li><li>Enter Wi-Fi and printer details.</li><li>Save and wait for reboot.</li></ol></div>";
 constexpr char kPortalPageTail[] PROGMEM = "</body></html>";
 constexpr char kPortalUrl[] = "http://192.168.4.1/";
@@ -429,10 +428,17 @@ void CaptiveHttp::sendPortalPage(const String& message, bool isError) {
   const String setupSsidValue = htmlEscape(apSsid_);
   const bool keepWifiPassword = hasDraftConfig_ && draftConfig_.wifiPassword[0] != '\0';
   const bool keepAccessCode = hasDraftConfig_ && draftConfig_.accessCode[0] != '\0';
+  const String uiTitle = getUiTitle();
 
   String body;
-  body.reserve(4400);
+  body.reserve(4600);
+  body += F("<!doctype html><html><head><meta charset='utf-8'><meta name='viewport' content='width=device-width,initial-scale=1'><title>");
+  body += uiTitle;
+  body += F(" Setup</title>");
   body += FPSTR(kPortalPageHead);
+  body += F("<h1>");
+  body += uiTitle;
+  body += F("</h1>");
   body += FPSTR(kPortalPageIntro);
   if (message.length() > 0) {
     body += F("<p class='status ");
@@ -486,12 +492,18 @@ void CaptiveHttp::sendPortalPage(const String& message, bool isError) {
 
 void CaptiveHttp::sendResultPage(int code, const String& title, const String& message) {
   sendSecurityHeaders();
+  const String uiTitle = getUiTitle();
   String body;
-  body.reserve(1200);
+  body.reserve(1500);
+  body += F("<!doctype html><html><head><meta charset='utf-8'><meta name='viewport' content='width=device-width,initial-scale=1'><title>");
+  body += uiTitle;
+  body += F(" Setup</title>");
   body += FPSTR(kPortalPageHead);
   body += F("<h1>");
+  body += uiTitle;
+  body += F("</h1><h2>");
   body += htmlEscape(title.c_str());
-  body += F("</h1><p class='status ");
+  body += F("</h2><p class='status ");
   body += (code >= 400) ? F("err") : F("ok");
   body += F("'><strong>");
   body += htmlEscape(message.c_str());

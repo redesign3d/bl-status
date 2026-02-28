@@ -4,6 +4,8 @@
 #include <esp_system.h>
 #include <string.h>
 
+#include "device_identity.h"
+
 namespace {
 constexpr char kHeader[] = "IMPROV";
 constexpr uint8_t kProtocolVersion = 0x01;
@@ -357,9 +359,7 @@ void ImprovSerial::buildDeviceName(char* out, size_t outLen) const {
   if (!out || outLen == 0) {
     return;
   }
-  uint8_t mac[6] = {0};
-  WiFi.macAddress(mac);
-  snprintf(out, outLen, "%s-%02X%02X", PRODUCT_NAME, mac[4], mac[5]);
+  strlcpy(out, getHostname().c_str(), outLen);
 }
 
 void ImprovSerial::buildDeviceInfoFields(char* firmwareVersion, size_t firmwareVersionLen, char* chipFamily,

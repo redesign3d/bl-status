@@ -4,6 +4,8 @@
 #include <string.h>
 #include <stdlib.h>
 
+#include "device_identity.h"
+
 namespace {
 PrinterClient* g_instance = nullptr;
 constexpr uint32_t WIFI_RETRY_INTERVAL_MS = 5000;
@@ -33,7 +35,7 @@ void PrinterClient::begin(PrinterStatus* sharedStatus, const DeviceConfig* runti
 
   WiFi.mode(WIFI_STA);
   WiFi.setAutoReconnect(true);
-  WiFi.setHostname("bambu-status");
+  WiFi.setHostname(getHostname().c_str());
 
   // Configure TLS from provisioned config.
   if (config_->tlsInsecure) {

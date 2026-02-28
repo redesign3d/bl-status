@@ -1,5 +1,7 @@
 #include "Display.h"
 
+#include "device_identity.h"
+
 #include <Arduino.h>
 #include <Wire.h>
 #include <math.h>
@@ -16,7 +18,7 @@ void drawWifiScreen() {
 
   display.setTextSize(1);
   display.setCursor(0, 0);
-  display.println("Bambu Status");
+  display.println(getUiTitle());
 
   display.setTextSize(2);
   display.setCursor(0, 16);
@@ -99,7 +101,7 @@ void drawStatus(const PrinterStatus& status) {
   // Top line: static title
   display.setTextSize(1);
   display.setCursor(0, 0);
-  display.println("Bambu Status");
+  display.println(getUiTitle());
 
   constexpr int charWidth = 6;
   int statusTextSize = 2;
@@ -167,20 +169,20 @@ void drawProvisioningScreen(const char* apSsid, const IPAddress& apIp) {
   display.setTextWrap(false);
   display.setTextSize(1);
   display.setCursor(0, 0);
-  display.println("Setup Mode");
+  display.println(getUiTitle());
 
   drawQrCode(0, 11);
   display.drawRect(0, 11, 58, 52, SSD1306_WHITE);
 
   display.setCursor(64, 0);
+  display.println("Setup Mode");
+  display.setCursor(64, 10);
   display.println("1 Join AP");
-  printWrappedValue(apSsid ? apSsid : "BambuStatus", 64, 10, 10, 10);
-  display.setCursor(64, 34);
+  printWrappedValue(apSsid ? apSsid : "BambuStatus", 64, 20, 10, 10);
+  display.setCursor(64, 42);
   display.println("2 Open / Scan");
-  display.setCursor(64, 44);
+  display.setCursor(64, 52);
   display.println(apIp.toString());
-  display.setCursor(64, 54);
-  display.println("192.168.4.1");
 
   display.display();
 }
