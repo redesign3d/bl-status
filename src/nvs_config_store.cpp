@@ -20,7 +20,26 @@ constexpr const char* kKeyMqttUsername = "mu";
 constexpr const char* kKeyAccessCode = "ac";
 constexpr const char* kKeyTlsInsecure = "ti";
 
+constexpr const char* kLedNamespace = "led";
+constexpr const char* kKeyLedVersion = "lv";
+constexpr const char* kKeyLedMaxBrightness = "mb";
+constexpr const char* kKeyLedStates = "st";
+
 bool g_nvsReady = false;
+
+struct StoredLedStateStyleV1 {
+  uint8_t mode;
+  uint8_t r;
+  uint8_t g;
+  uint8_t b;
+  uint8_t baselineBrightness;
+  uint16_t speedMs;
+  uint8_t flashDutyPct;
+};
+
+struct StoredLedStateBlobV1 {
+  StoredLedStateStyleV1 states[LED_PRINTER_STATE_COUNT];
+};
 
 bool isPrintableAscii(const char* value) {
   if (!value) {
@@ -113,6 +132,39 @@ bool readString(nvs_handle_t handle, const char* key, char* dst, size_t dstLen) 
   return true;
 }
 
+void copyLedStateToStored(const LedStateStyle& source, StoredLedStateStyleV1* dest) {
+  if (!dest) {
+    return;
+  }
+  dest->mode = static_cast<uint8_t>(source.mode);
+  dest->r = source.color.r;
+  dest->g = source.color.g;
+  dest->b = source.color.b;
+  dest->baselineBrightness = source.baselineBrightness;
+  dest->speedMs = source.speedMs;
+  dest->flashDutyPct = source.flashDutyPct;
+}
+
+void copyStoredToLedState(const StoredLedStateStyleV1& source, LedStateStyle* dest) {
+  if (!dest) {
+    return;
+  }
+  dest->mode = static_cast<LedAnimationMode>(source.mode);
+  dest->color = LedColor{source.r, source.g, source.b};
+  dest->baselineBrightness = source.baselineBrightness;
+  dest->speedMs = source.speedMs;
+  dest->flashDutyPct = source.flashDutyPct;
+}
+
+bool readLedStateBlob(nvs_handle_t handle, const char* key, StoredLedStateBlobV1* blob) {
+  if (!blob) {
+    return false;
+  }
+  size_t expectedSize = sizeof(StoredLedStateBlobV1);
+  esp_err_t err = nvs_get_blob(handle, key, blob, &expectedSize);
+  return err == ESP_OK && expectedSize == sizeof(StoredLedStateBlobV1);
+}
+
 bool readConfigInternal(bool requireProvisioned, DeviceConfig* outConfig) {
   if (!outConfig) {
     return false;
@@ -190,6 +242,90 @@ bool verifyConfigInStore() {
   ConfigValidationResult validation = validateDeviceConfig(verifyConfig);
   clearDeviceConfig(&verifyConfig);
   return validation.ok;
+}
+
+bool migrateLedConfigIfNeeded(uint8_t version, uint8_t maxBrightness, const StoredLedStateBlobV1& stored,
+                              LedBehaviorConfig* outConfig) {
+  if (!outConfig) {
+    return false;
+  }
+
+  switch (version) {
+    case LED_CONFIG_SCHEMA_VERSION:
+      outConfig->maxBrightness = maxBrightness;
+      for (size_t i = 0; i < LED_PRINTER_STATE_COUNT; ++i) {
+        copyStoredToLedState(stored.states[i], &outConfig->states[i]);
+      }
+      normalizeLedBehaviorConfig(outConfig);
+      return true;
+    default:
+      return false;
+  }
+}
+
+bool readLedConfigInternal(LedBehaviorConfig* outConfig) {
+  if (!outConfig) {
+    return false;
+  }
+
+  clearLedBehaviorConfig(outConfig);
+
+  nvs_handle_t handle = 0;
+  esp_err_t err = nvs_open(kLedNamespace, NVS_READONLY, &handle);
+  if (err != ESP_OK) {
+    return false;
+  }
+
+  uint8_t version = 0;
+  uint8_t maxBrightness = 0;
+  StoredLedStateBlobV1 stored{};
+  bool ok = false;
+
+  err = nvs_get_u8(handle, kKeyLedVersion, &version);
+  if (err == ESP_OK) {
+    err = nvs_get_u8(handle, kKeyLedMaxBrightness, &maxBrightness);
+  }
+  if (err == ESP_OK) {
+    ok = readLedStateBlob(handle, kKeyLedStates, &stored);
+  }
+  nvs_close(handle);
+
+  if (err != ESP_OK || !ok) {
+    return false;
+  }
+  if (!migrateLedConfigIfNeeded(version, maxBrightness, stored, outConfig)) {
+    return false;
+  }
+  LedConfigValidationResult validation = validateLedBehaviorConfig(*outConfig);
+  if (!validation.ok) {
+    clearLedBehaviorConfig(outConfig);
+    return false;
+  }
+  return true;
+}
+
+bool verifyLedConfigInStore(const LedBehaviorConfig& expectedConfig) {
+  LedBehaviorConfig stored{};
+  if (!readLedConfigInternal(&stored)) {
+    return false;
+  }
+
+  LedBehaviorConfig expected = expectedConfig;
+  normalizeLedBehaviorConfig(&expected);
+  bool matches = stored.maxBrightness == expected.maxBrightness;
+  if (matches) {
+    for (size_t i = 0; i < LED_PRINTER_STATE_COUNT && matches; ++i) {
+      const LedStateStyle& lhs = stored.states[i];
+      const LedStateStyle& rhs = expected.states[i];
+      matches = lhs.mode == rhs.mode && lhs.color.r == rhs.color.r && lhs.color.g == rhs.color.g &&
+                lhs.color.b == rhs.color.b && lhs.baselineBrightness == rhs.baselineBrightness &&
+                lhs.speedMs == rhs.speedMs && lhs.flashDutyPct == rhs.flashDutyPct;
+    }
+  }
+
+  clearLedBehaviorConfig(&stored);
+  clearLedBehaviorConfig(&expected);
+  return matches;
 }
 
 bool eraseKeys(nvs_handle_t handle) {
@@ -369,6 +505,101 @@ bool isConfigProvisioned() {
   return ok;
 }
 
+bool loadLedBehaviorConfig(LedBehaviorConfig* outConfig, bool defaultsIfMissing) {
+  if (!outConfig || !initConfigStore()) {
+    return false;
+  }
+
+  if (readLedConfigInternal(outConfig)) {
+    return true;
+  }
+
+  if (!defaultsIfMissing) {
+    return false;
+  }
+
+  setDefaultLedBehaviorConfig(outConfig);
+  return true;
+}
+
+bool saveLedBehaviorConfigAtomic(const LedBehaviorConfig& config) {
+  if (!initConfigStore()) {
+    return false;
+  }
+
+  LedBehaviorConfig normalized = config;
+  normalizeLedBehaviorConfig(&normalized);
+  LedConfigValidationResult validation = validateLedBehaviorConfig(normalized);
+  if (!validation.ok) {
+    clearLedBehaviorConfig(&normalized);
+    return false;
+  }
+
+  StoredLedStateBlobV1 stored{};
+  for (size_t i = 0; i < LED_PRINTER_STATE_COUNT; ++i) {
+    copyLedStateToStored(normalized.states[i], &stored.states[i]);
+  }
+
+  nvs_handle_t handle = 0;
+  esp_err_t err = nvs_open(kLedNamespace, NVS_READWRITE, &handle);
+  if (err != ESP_OK) {
+    clearLedBehaviorConfig(&normalized);
+    return false;
+  }
+
+  err = nvs_set_u8(handle, kKeyLedVersion, LED_CONFIG_SCHEMA_VERSION);
+  if (err == ESP_OK) {
+    err = nvs_set_u8(handle, kKeyLedMaxBrightness, normalized.maxBrightness);
+  }
+  if (err == ESP_OK) {
+    err = nvs_set_blob(handle, kKeyLedStates, &stored, sizeof(stored));
+  }
+  if (err == ESP_OK) {
+    err = nvs_commit(handle);
+  }
+  nvs_close(handle);
+
+  if (err != ESP_OK) {
+    clearLedBehaviorConfig(&normalized);
+    return false;
+  }
+
+  const bool ok = verifyLedConfigInStore(normalized);
+  clearLedBehaviorConfig(&normalized);
+  return ok;
+}
+
+bool clearLedBehaviorConfigStore() {
+  if (!initConfigStore()) {
+    return false;
+  }
+
+  nvs_handle_t handle = 0;
+  esp_err_t err = nvs_open(kLedNamespace, NVS_READWRITE, &handle);
+  if (err == ESP_ERR_NVS_NOT_FOUND) {
+    return true;
+  }
+  if (err != ESP_OK) {
+    return false;
+  }
+
+  const char* keys[] = {kKeyLedVersion, kKeyLedMaxBrightness, kKeyLedStates};
+  bool ok = true;
+  for (size_t i = 0; i < (sizeof(keys) / sizeof(keys[0])); ++i) {
+    err = nvs_erase_key(handle, keys[i]);
+    if (err != ESP_OK && err != ESP_ERR_NVS_NOT_FOUND) {
+      ok = false;
+      break;
+    }
+  }
+  if (ok) {
+    err = nvs_commit(handle);
+    ok = (err == ESP_OK);
+  }
+  nvs_close(handle);
+  return ok;
+}
+
 bool runValidationSelfTest(Stream& out) {
   DeviceConfig cfg{};
   strlcpy(cfg.wifiSsid, "QA-Network", sizeof(cfg.wifiSsid));
@@ -407,6 +638,10 @@ bool runValidationSelfTest(Stream& out) {
   r = validateDeviceConfig(cfg);
   if (r.ok) {
     out.println("Self-test failed: expected invalid host");
+    ok = false;
+  }
+
+  if (!runLedConfigValidationSelfTest(out)) {
     ok = false;
   }
 
