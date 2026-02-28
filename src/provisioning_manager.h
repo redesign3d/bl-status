@@ -6,6 +6,7 @@
 #include "captive_dns.h"
 #include "captive_http.h"
 #include "improv_serial.h"
+#include "mdns_manager.h"
 #include "softap_manager.h"
 
 enum class ProvisioningState : uint8_t {
@@ -50,6 +51,8 @@ class ProvisioningManager : public CaptiveHttpHandler, public ImprovSerialHandle
   uint8_t randomByte();
   bool isPrintableAscii(const char* value) const;
   void refreshDraftInPortal();
+  void updateRuntimeDiscovery(bool wifiConnected);
+  void stopRuntimeDiscovery();
 
   ProvisioningState state_;
   DeviceConfig activeConfig_;
@@ -73,4 +76,5 @@ class ProvisioningManager : public CaptiveHttpHandler, public ImprovSerialHandle
   CaptiveDns dns_;
   CaptiveHttp http_;
   ImprovSerial improv_;
+  MdnsManager mdns_;
 };

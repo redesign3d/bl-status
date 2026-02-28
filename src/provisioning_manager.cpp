@@ -5,6 +5,7 @@
 #include <string.h>
 
 #include "LogRedaction.h"
+#include "device_identity.h"
 #include "nvs_config_store.h"
 
 namespace {
@@ -108,14 +109,17 @@ IPAddress ProvisioningManager::provisioningIp() const { return apIp_; }
 
 void ProvisioningManager::notifyConnectivity(bool wifiConnected, uint32_t nowMs) {
   if (state_ != ProvisioningState::NORMAL_OPERATION) {
+    stopRuntimeDiscovery();
     return;
   }
   if (wifiConnected) {
     wifiFailureCount_ = 0;
     lastWifiFailureCheckMs_ = nowMs;
     wifiFailureThreshold_ = WIFI_FAILURE_THRESHOLD_BASE;
+    updateRuntimeDiscovery(true);
     return;
   }
+  stopRuntimeDiscovery();
   if ((nowMs - lastWifiFailureCheckMs_) < WIFI_FAILURE_CHECK_INTERVAL_MS) {
     return;
   }
@@ -139,6 +143,7 @@ void ProvisioningManager::notifyConnectivity(bool wifiConnected, uint32_t nowMs)
 void ProvisioningManager::requestFactoryReset() {
   char message[96];
   resetProvisioningConfig(message, sizeof(message));
+  stopRuntimeDiscovery();
   stopProvisioning();
   state_ = ProvisioningState::ENTER_PROVISIONING;
   nextProvisionRetryMs_ = millis();
@@ -282,6 +287,7 @@ bool ProvisioningManager::loadConfigFromNvs() {
 }
 
 bool ProvisioningManager::startProvisioning(uint32_t nowMs) {
+  stopRuntimeDiscovery();
   stopProvisioning();
   buildProvisioningSsid();
   generateResetToken();
@@ -338,6 +344,7 @@ void ProvisioningManager::stopProvisioning() {
 }
 
 void ProvisioningManager::scheduleReboot(uint32_t nowMs) {
+  stopRuntimeDiscovery();
   state_ = ProvisioningState::REBOOT_PENDING;
   rebootAtMs_ = nowMs + PROVISIONING_REBOOT_DELAY_MS;
 }
@@ -371,3 +378,9 @@ bool ProvisioningManager::isPrintableAscii(const char* value) const {
 }
 
 void ProvisioningManager::refreshDraftInPortal() { http_.setDraftConfig(&draftConfig_); }
+
+void ProvisioningManager::updateRuntimeDiscovery(bool wifiConnected) {
+  mdns_.updateMdns(wifiConnected, getHostname().c_str(), PROVISIONING_HTTP_PORT);
+}
+
+void ProvisioningManager::stopRuntimeDiscovery() { mdns_.endMdns(); }
